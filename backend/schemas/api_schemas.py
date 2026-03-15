@@ -19,8 +19,6 @@ class ExecutionEmail(BaseModel):
     price: Decimal
     db_status: str = "pending"  # default
 
-
-
 class Execution(BaseModel):
     reference:str
     time:datetime
@@ -29,3 +27,10 @@ class Execution(BaseModel):
     symbol:str
     price: Decimal
     category:Optional[str]
+
+# Db response when updating execution category
+class CategoryUpdate(BaseModel):
+    reference: str
+    symbol: str
+    category: str
+    updated: bool

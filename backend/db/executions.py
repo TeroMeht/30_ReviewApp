@@ -1,5 +1,5 @@
 import asyncpg
-from schemas.api_schemas import ExecutionEmail,Execution
+from schemas.api_schemas import ExecutionEmail,Execution,CategoryUpdate
 import logging
 logger = logging.getLogger(__name__)
 
@@ -81,9 +81,6 @@ async def insert_executions(db_conn: asyncpg.Connection, executions: list[Execut
     return executions
 
 
-
-
-
 async def fetch_executions(db_conn: asyncpg.Connection, year: int, month: int) -> list[Execution]:
     rows = await db_conn.fetch(
         """
@@ -96,3 +93,24 @@ async def fetch_executions(db_conn: asyncpg.Connection, year: int, month: int) -
         year, month
     )
     return [Execution(**dict(row)) for row in rows]
+
+
+
+
+async def update_execution_category(
+    db_conn: asyncpg.Connection,
+    reference: str,
+    category: str
+) -> CategoryUpdate:
+    row = await db_conn.fetchrow(
+        """
+        UPDATE executions
+        SET category = $1
+        WHERE reference = $2
+        RETURNING reference, symbol, category
+        """,
+        category, reference
+    )
+    if row is None:
+        raise ValueError(f"No execution found for reference={reference}")
+    return CategoryUpdate(**dict(row), updated=True)
