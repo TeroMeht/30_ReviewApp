@@ -199,6 +199,23 @@ function CategoryCell({
   )
 }
 
+// ─── PnL calculation ──────────────────────────────────────────────────────────
+
+function calcDailyPnl(executions: Execution[]): number {
+  // Group by symbol, sum sell value - buy value
+  const bySymbol: Record<string, number> = {}
+
+  for (const exec of executions) {
+    const value = Number(exec.price) * exec.size
+    if (!bySymbol[exec.symbol]) bySymbol[exec.symbol] = 0
+    if (exec.action === "SOLD")   bySymbol[exec.symbol] += value
+    if (exec.action === "BOUGHT") bySymbol[exec.symbol] -= value
+  }
+
+  return Object.values(bySymbol).reduce((sum, v) => sum + v, 0)
+}
+
+
 // ─── Execution detail modal ───────────────────────────────────────────────────
 
 function ExecutionModal({
@@ -220,8 +237,10 @@ function ExecutionModal({
     return () => window.removeEventListener("keydown", onKey)
   }, [onClose])
 
-  const bought = executions.filter((e) => e.action === "BOUGHT")
-  const sold = executions.filter((e) => e.action === "SOLD")
+  const bought   = executions.filter((e) => e.action === "BOUGHT")
+  const sold     = executions.filter((e) => e.action === "SOLD")
+  const dailyPnl = calcDailyPnl(executions)
+  const pnlColor = dailyPnl >= 0 ? "var(--modal-badge-bought-fg)" : "var(--modal-badge-sold-fg)"
 
   return (
     <>
@@ -273,6 +292,7 @@ function ExecutionModal({
               --modal-badge-bought-bg:rgba(22,163,74,0.15); --modal-badge-bought-fg:#4ade80;
               --modal-badge-sold-bg:rgba(220,38,38,0.15);   --modal-badge-sold-fg:#f87171;
               --modal-tag-bg:#1f2937; --modal-tag-fg:#9ca3af;
+              --modal-pnl-row-bg:#0d1a12;
             }
           }
           @media (prefers-color-scheme: light) {
@@ -283,6 +303,7 @@ function ExecutionModal({
               --modal-badge-bought-bg:rgba(22,163,74,0.1); --modal-badge-bought-fg:#15803d;
               --modal-badge-sold-bg:rgba(220,38,38,0.1);   --modal-badge-sold-fg:#b91c1c;
               --modal-tag-bg:#f3f4f6; --modal-tag-fg:#6b7280;
+              --modal-pnl-row-bg:#f0fdf4;
             }
           }
         `}</style>
@@ -364,7 +385,7 @@ function ExecutionModal({
                     <tr
                       key={exec.reference}
                       style={{
-                        borderBottom: i < executions.length - 1 ? "1px solid var(--modal-divider)" : "none",
+                        borderBottom: "1px solid var(--modal-divider)",
                         transition: "background 0.1s",
                       }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--modal-row-hover)")}
@@ -400,6 +421,35 @@ function ExecutionModal({
                     </tr>
                   )
                 })}
+
+                {/* ── Daily PnL summary row ── */}
+                <tr style={{
+                  background: "var(--modal-pnl-row-bg)",
+                  borderTop: "2px solid var(--modal-divider)",
+                  position: "sticky",
+                  bottom: 0,
+                }}>
+                  <td colSpan={4} style={{
+                    padding: "10px 14px",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    letterSpacing: "0.07em",
+                    textTransform: "uppercase",
+                    color: "var(--modal-subtext)",
+                  }}>
+                    Daily PnL
+                  </td>
+                  <td colSpan={2} style={{
+                    padding: "10px 14px",
+                    fontSize: 15,
+                    fontWeight: 700,
+                    fontVariantNumeric: "tabular-nums",
+                    color: pnlColor,
+                    letterSpacing: "0.02em",
+                  }}>
+                    {dailyPnl >= 0 ? "+" : ""}${dailyPnl.toFixed(2)}
+                  </td>
+                </tr>
               </tbody>
             </table>
           )}

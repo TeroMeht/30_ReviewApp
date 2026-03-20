@@ -34,3 +34,7 @@ class CategoryUpdate(BaseModel):
     symbol: str
     category: str
     updated: bool
+
+
+
+        
