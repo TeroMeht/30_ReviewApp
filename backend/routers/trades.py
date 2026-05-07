@@ -24,7 +24,6 @@ from db.trades import (
     fetch_trade_by_id,
     update_trade,
     delete_trade,
-    fetch_executions_for_trade,
     insert_manual_trades,
     sync_trades_from_executions,
 )
@@ -260,13 +259,4 @@ async def remove_trade(tradeid: int, db_conn=Depends(get_db_conn)):
         raise HTTPException(status_code=500, detail=f"Failed to delete trade: {e}")
 
 
-@router.get("/{tradeid}/executions", response_model=list[Execution])
-async def get_trade_executions(tradeid: int, db_conn=Depends(get_db_conn)):
-    try:
-        # Confirm the trade exists for a clean 404 vs an empty list.
-        await fetch_trade_by_id(db_conn, tradeid)
-        return await fetch_executions_for_trade(db_conn, tradeid)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch executions: {e}")
+

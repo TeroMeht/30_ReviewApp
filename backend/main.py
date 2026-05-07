@@ -19,11 +19,7 @@ from routers import executions, trades
 
 # Schema setup helpers
 from db.executions import create_executions_table
-from db.trades import (
-    create_trades_table,
-    add_trade_fk_to_executions,
-    add_notes_column_to_trades,
-)
+from db.trades import create_trades_table
 from db.trade_bars import create_trade_bars_tables
 
 
@@ -54,15 +50,10 @@ async def lifespan(app: FastAPI):
         logger.info("Creating DB pool")
         db_pool = await asyncpg.create_pool(dsn=settings.DATABASE_URL)
 
-        # Ensure tables / columns exist. Order matters: executions first,
-        # then trades, then add the FK column on executions. Per-column
-        # migration helpers (add_notes_column_to_trades) backfill columns
-        # on databases that pre-date the schema change.
+
         async with db_pool.acquire() as conn:
-            await create_executions_table(conn)
             await create_trades_table(conn)
-            await add_notes_column_to_trades(conn)
-            await add_trade_fk_to_executions(conn)
+            await create_executions_table(conn)
             await create_trade_bars_tables(conn)
 
         app.state.ib = ib

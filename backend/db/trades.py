@@ -3,13 +3,14 @@ Trades table: one row per (symbol, local-day) bucket of executions.
 
 Relationship:
     trades 1 ── many executions
-    executions.tradeid is a nullable FK to trades.tradeid (ON DELETE SET NULL).
+    executions.trade_fk is a nullable FK to trades.tradeid (ON DELETE SET NULL).
+    (executions.tradeid is IB's TEXT per-fill id and is the primary key.)
 
 Auto-link logic:
-    sync_trades_from_executions() finds all executions whose tradeid IS NULL,
+    sync_trades_from_executions() finds all executions whose trade_fk IS NULL,
     groups them by (symbol, day-in-Europe/Helsinki), upserts a trades row for
-    each missing pair (with date = MIN(execution.time) for that day), then
-    sets executions.tradeid for every matching execution.
+    each missing pair (with date = MIN(execution.datetime) for that day),
+    then sets executions.trade_fk for every matching execution.
 """
 
 import asyncpg
@@ -70,70 +71,6 @@ async def create_trades_table(db_conn: asyncpg.Connection) -> None:
         ON trades (symbol, ((date AT TIME ZONE '{LOCAL_TZ}')::date))
     """)
     logger.info("Trades table + unique index created successfully")
-
-
-async def add_notes_column_to_trades(db_conn: asyncpg.Connection) -> None:
-    """ALTER trades ADD COLUMN notes TEXT NULL. Idempotent — used to migrate older DBs."""
-    col_exists = await db_conn.fetchval("""
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND table_name = 'trades'
-              AND column_name = 'notes'
-        )
-    """)
-    if col_exists:
-        logger.info("trades.notes already exists, skipping ALTER")
-        return
-
-    await db_conn.execute("ALTER TABLE trades ADD COLUMN notes TEXT NULL")
-    logger.info("Added notes column to trades")
-
-
-async def add_trade_fk_to_executions(db_conn: asyncpg.Connection) -> None:
-    """
-    ALTER executions ADD COLUMN trade_fk (FK → trades.tradeid). Idempotent.
-
-    `executions.tradeid` is already taken: it stores IB's per-fill execution
-    identifier (TEXT, primary key) coming from the Flex Web Service. So the
-    foreign key to our internal `trades.tradeid` lives in a separate column
-    called `trade_fk`.
-
-    On the FIRST creation of this column we also TRUNCATE the trades table.
-    This is a one-time clean slate for the IB-Flex migration: any rows in
-    `trades` left over from the old email-based flow are unlikely to match
-    cleanly to the new IB executions, and the user opted to wipe and
-    regenerate. Subsequent app boots are no-ops because the column already
-    exists.
-    """
-    col_exists = await db_conn.fetchval("""
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND table_name = 'executions'
-              AND column_name = 'trade_fk'
-        )
-    """)
-    if col_exists:
-        logger.info("executions.trade_fk already exists, skipping ALTER")
-        return
-
-    async with db_conn.transaction():
-        # One-time wipe so Generate Trades produces a clean (symbol, day) set.
-        # CASCADE so we don't error on dependent tables (trade_bars, etc).
-        await db_conn.execute("TRUNCATE trades RESTART IDENTITY CASCADE")
-        logger.info("Wiped trades table (one-time IB-Flex migration)")
-
-        await db_conn.execute("""
-            ALTER TABLE executions
-            ADD COLUMN trade_fk INTEGER NULL
-            REFERENCES trades(tradeid) ON DELETE SET NULL
-        """)
-        # Helpful for joins / lookups by linked trade.
-        await db_conn.execute("""
-            CREATE INDEX IF NOT EXISTS executions_trade_fk_idx ON executions (trade_fk)
-        """)
-    logger.info("Added trade_fk FK column to executions")
 
 
 # ─── CRUD ─────────────────────────────────────────────────────────────────────
@@ -267,20 +204,6 @@ async def delete_trade(db_conn: asyncpg.Connection, tradeid: int) -> bool:
     return True
 
 
-async def fetch_executions_for_trade(
-    db_conn: asyncpg.Connection,
-    tradeid: int,
-) -> list[Execution]:
-    rows = await db_conn.fetch(
-        """
-        SELECT reference, time, action, size, symbol, price, category, tradeid
-        FROM executions
-        WHERE tradeid = $1
-        ORDER BY time ASC
-        """,
-        tradeid,
-    )
-    return [Execution(**dict(r)) for r in rows]
 
 
 # ─── Manual trade insertion ──────────────────────────────────────────────────

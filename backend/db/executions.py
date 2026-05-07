@@ -7,6 +7,18 @@ logger = logging.getLogger(__name__)
 
 # Database table initilization
 async def create_executions_table(db_conn: asyncpg.Connection) -> None:
+    """
+    Create the executions table. Idempotent.
+
+    Columns:
+      * tradeid    — IB Flex per-fill execution id (TEXT, primary key).
+      * trade_fk   — FK to trades.tradeid; NULL until Generate Trades runs.
+                     ON DELETE SET NULL so deleting a parent trade unlinks
+                     its executions instead of erroring or cascading.
+
+    NOTE: This table references `trades(tradeid)`, so the trades table
+    MUST be created first. Startup in main.py orders these correctly.
+    """
     exists = await db_conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.tables
@@ -27,8 +39,14 @@ async def create_executions_table(db_conn: asyncpg.Connection) -> None:
             quantity      INTEGER NOT NULL,
             tradeprice    NUMERIC(10, 3) NOT NULL,
             iborderid     TEXT NOT NULL,
-            ibcommission  NUMERIC NOT NULL
+            ibcommission  NUMERIC NOT NULL,
+            trade_fk      INTEGER NULL
+                           REFERENCES trades(tradeid) ON DELETE SET NULL
         )
+    """)
+    # Helpful for joins / lookups by linked trade.
+    await db_conn.execute("""
+        CREATE INDEX IF NOT EXISTS executions_trade_fk_idx ON executions (trade_fk)
     """)
     logger.info("Executions table created successfully")
 
