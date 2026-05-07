@@ -1,0 +1,8 @@
+# Top-level catch-all. Sub-packages have their own .gitignore.
+.venv/
+__pycache__/
+node_modules/
+.next/
+.env
+*.env
+!.env.example
