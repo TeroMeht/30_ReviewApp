@@ -6,10 +6,23 @@ ending at the trade's `date`. RTH only, whatToShow='TRADES'. Each (tradeid,
 timeframe) pair is fetched at most once: if rows already exist for that
 combination we skip — manual retries can be done via the dedicated route.
 
-`schedule_bar_fetch` exposes a fire-and-forget API: it spawns an asyncio
-background task and returns immediately. The task pulls a fresh DB
-connection from the app's pool, so it doesn't depend on the request's
+Concurrency model — IB pacing constraint:
+  IBKR throttles historical-data requests aggressively, so we serialise
+  per-ticker work with a single process-wide `asyncio.Lock`
+  (`_TICKER_LOCK`). At most one trade is ever requesting bars at a time.
+  Inside the lock the three timeframes for that trade fire concurrently
+  via `asyncio.gather` (one DB connection per timeframe) — that's what
+  the user signed off on as "the 3 timeframes can fire async, but the
+  next ticker waits".
+
+`schedule_bar_fetch_batch` exposes a fire-and-forget API: it spawns an
+asyncio background task and returns immediately. The task pulls fresh DB
+connections from the app's pool, so it doesn't depend on the request's
 connection lifetime.
+
+Bar timestamps are stored TIMESTAMPTZ but normalised to Europe/Helsinki
+before insert so reads return Helsinki-offset datetimes (matches the rest
+of the app — executions and trades both bucket on Europe/Helsinki).
 """
 
 import asyncio
@@ -36,6 +49,21 @@ from db.trade_bars import (
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+# Helsinki zone — bar timestamps are converted to this before insert so the
+# TIMESTAMPTZ values returned by the DB are already in the local zone.
+_HELSINKI_TZ = ZoneInfo(LOCAL_TZ)
+
+
+# ─── IB pacing lock ───────────────────────────────────────────────────────────
+#
+# Process-wide lock that serialises per-ticker IB requests. Acquired around
+# the gather() of a single trade's three timeframes; released before moving
+# to the next trade in the queue. If two batches are scheduled concurrently
+# (e.g. user double-clicks the button) they share this lock so the IB
+# pacing guarantee still holds.
+_TICKER_LOCK: asyncio.Lock = asyncio.Lock()
 
 
 # ─── In-memory bar-fetch status tracking ──────────────────────────────────────
@@ -117,15 +145,20 @@ async def fetch_bar_counts_for_trades(
 def _bar_time_to_datetime(d) -> datetime:
     """
     ib_async returns `bar.date` as a `datetime` for intraday bars and a `date`
-    for daily bars. Normalise both to a tz-aware UTC datetime so the column
-    type (TIMESTAMPTZ) is consistent across all three tables.
+    for daily bars. Normalise both to a tz-aware Europe/Helsinki datetime —
+    asyncpg will write the same instant into TIMESTAMPTZ; on read it comes
+    back in the Helsinki offset, which matches how the rest of the app
+    timestamps user-facing data.
     """
     if isinstance(d, datetime):
-        if d.tzinfo is None:
-            return d.replace(tzinfo=timezone.utc)
-        return d
+        # Intraday bars: with formatDate=2 IB returns tz-aware UTC datetimes.
+        # Some IB code paths still hand back naive datetimes, so default to UTC.
+        dt_utc = d if d.tzinfo is not None else d.replace(tzinfo=timezone.utc)
+        return dt_utc.astimezone(_HELSINKI_TZ)
     if isinstance(d, date):
-        return datetime.combine(d, dt_time(0, 0), tzinfo=timezone.utc)
+        # Daily bars: a naked `date`. Treat it as midnight Helsinki — that's
+        # the local trading day boundary the user thinks in.
+        return datetime.combine(d, dt_time(0, 0), tzinfo=_HELSINKI_TZ)
     raise TypeError(f"Unexpected bar.date type: {type(d).__name__}")
 
 
@@ -234,28 +267,177 @@ async def _fetch_one_timeframe(
 
 async def fetch_bars_for_trade(
     ib: IB,
-    db_conn: asyncpg.Connection,
+    db_pool: asyncpg.Pool,
     trade: Trade,
 ) -> BarFetchResult:
-    """Fetch all three timeframes for a single trade. Best-effort: per-tf failures don't abort the others."""
+    """
+    Fetch all three timeframes for a single trade. The 3 timeframes run
+    concurrently with `asyncio.gather` (each on its own pooled connection
+    so we don't share an asyncpg.Connection across concurrent statements).
+
+    Acquires the global `_TICKER_LOCK` so this is the only ticker hitting
+    IB while it runs — IB's pacing rules don't tolerate parallel
+    historical-data requests across different contracts.
+
+    Best-effort: per-timeframe failures don't abort the others; the failed
+    timeframe just comes back with `error` set on its result.
+    """
     if not ib.isConnected():
-        msg = f"IB not connected; cannot fetch bars for tradeid={trade.tradeid}"
-        logger.warning(msg)
+        logger.warning(
+            "IB not connected; cannot fetch bars for tradeid=%d", trade.tradeid
+        )
         return BarFetchResult(
             tradeid=trade.tradeid,
             symbol=trade.symbol,
             results=[
-                BarFetchTimeframeResult(timeframe=tf.label, inserted=0, skipped=False, error="ib_not_connected")
+                BarFetchTimeframeResult(
+                    timeframe=tf.label, inserted=0, skipped=False,
+                    error="ib_not_connected",
+                )
                 for tf in TIMEFRAMES
             ],
         )
 
+    async def _run_one(tf: TimeframeSpec) -> BarFetchTimeframeResult:
+        # Each timeframe gets its own connection — asyncpg connections are
+        # not safe for concurrent queries.
+        async with db_pool.acquire() as conn:
+            return await _fetch_one_timeframe(ib, conn, trade, tf)
+
+    async with _TICKER_LOCK:
+        logger.info(
+            "[bars tradeid=%d %s] acquired IB ticker lock; firing %d timeframes",
+            trade.tradeid, trade.symbol, len(TIMEFRAMES),
+        )
+        gathered = await asyncio.gather(
+            *(_run_one(tf) for tf in TIMEFRAMES),
+            return_exceptions=True,
+        )
+
     results: list[BarFetchTimeframeResult] = []
-    for tf in TIMEFRAMES:
-        res = await _fetch_one_timeframe(ib, db_conn, trade, tf)
-        results.append(res)
+    for tf, r in zip(TIMEFRAMES, gathered):
+        if isinstance(r, BaseException):
+            logger.exception(
+                "[bars tradeid=%d %s/%s] timeframe task crashed",
+                trade.tradeid, trade.symbol, tf.label, exc_info=r,
+            )
+            results.append(BarFetchTimeframeResult(
+                timeframe=tf.label, inserted=0, skipped=False, error=str(r),
+            ))
+        else:
+            results.append(r)
+
     return BarFetchResult(
         tradeid=trade.tradeid, symbol=trade.symbol, results=results,
     )
+
+
+# ─── Incomplete-trade discovery ───────────────────────────────────────────────
+
+async def find_incomplete_tradeids(db_conn: asyncpg.Connection) -> list[int]:
+    """
+    Return tradeids that are missing at least one timeframe of bar data.
+
+    A trade is "complete" only when EVERY timeframe in TIMEFRAMES has at
+    least one row. Any other state (zero rows, partial coverage) lands the
+    trade in the returned list. Order: ascending by tradeid for determinism.
+
+    Implementation note: we use OR'd NOT EXISTS subqueries instead of
+    chaining LEFT JOINs. Multiple LEFT JOINs against the bar tables would
+    produce a Cartesian product (e.g. 250 daily × 350 30-min × 1000 2-min
+    rows per trade) which is a serious perf hazard once trades fill in.
+    NOT EXISTS short-circuits per timeframe and uses the (tradeid, time)
+    PK index on each bar table.
+    """
+    not_exists_clauses = " OR ".join(
+        f"NOT EXISTS (SELECT 1 FROM {tf.table} WHERE tradeid = t.tradeid)"
+        for tf in TIMEFRAMES
+    )
+    sql = f"""
+        SELECT t.tradeid
+        FROM trades t
+        WHERE {not_exists_clauses}
+        ORDER BY t.tradeid ASC
+    """
+    rows = await db_conn.fetch(sql)
+    return [int(r["tradeid"]) for r in rows]
+
+
+# ─── Batch / queue ────────────────────────────────────────────────────────────
+
+async def _process_batch(
+    ib: IB,
+    db_pool: asyncpg.Pool,
+    tradeids: list[int],
+) -> None:
+    """
+    Background worker: drain `tradeids` one at a time, fetching bars for
+    each. Per-trade failures are logged + surfaced via `_LAST_ERROR`; they
+    do NOT abort the rest of the queue.
+
+    `_IN_FLIGHT` is updated as each trade starts/finishes so the UI's
+    status endpoint reflects progress in real time.
+    """
+    logger.info("Bar-fetch batch starting: %d trade(s) queued", len(tradeids))
+    for tid in tradeids:
+        try:
+            # Trade row may have changed since scheduling — refetch.
+            async with db_pool.acquire() as conn:
+                trade = await fetch_trade_by_id(conn, tid)
+        except Exception as e:
+            logger.exception("Bar-fetch: failed to load tradeid=%d", tid)
+            _LAST_ERROR[tid] = f"load_trade: {e}"
+            _IN_FLIGHT.discard(tid)
+            continue
+
+        try:
+            result = await fetch_bars_for_trade(ib, db_pool, trade)
+            errors = [r.error for r in result.results if r.error]
+            if errors:
+                _LAST_ERROR[tid] = "; ".join(errors)
+            else:
+                _LAST_ERROR.pop(tid, None)
+        except Exception as e:
+            logger.exception("Bar-fetch: tradeid=%d crashed", tid)
+            _LAST_ERROR[tid] = str(e)
+        finally:
+            _IN_FLIGHT.discard(tid)
+
+    logger.info("Bar-fetch batch finished")
+
+
+def schedule_bar_fetch_batch(
+    ib: IB,
+    db_pool: asyncpg.Pool,
+    tradeids: list[int],
+) -> tuple[list[int], list[int]]:
+    """
+    Fire-and-forget: spawn a background task that processes `tradeids`
+    one at a time, returning (scheduled, skipped_already_fetching) where
+      * scheduled  — tradeids accepted into this batch
+      * skipped    — tradeids already in-flight from a previous batch
+
+    The caller (route handler) returns immediately; the UI polls
+    /api/trades/bars-status to track progress.
+    """
+    scheduled: list[int] = []
+    skipped: list[int] = []
+    for tid in tradeids:
+        if tid in _IN_FLIGHT:
+            skipped.append(tid)
+            continue
+        _IN_FLIGHT.add(tid)
+        # Clear any stale error state — a fresh attempt is being made.
+        _LAST_ERROR.pop(tid, None)
+        scheduled.append(tid)
+
+    if scheduled:
+        # Detached task — exceptions are caught inside _process_batch so
+        # we don't need to keep a reference for them. Naming helps debug.
+        asyncio.create_task(
+            _process_batch(ib, db_pool, scheduled),
+            name=f"bar-fetch-batch[{len(scheduled)}]",
+        )
+    return scheduled, skipped
 
 

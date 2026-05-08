@@ -165,4 +165,11 @@ export interface BarTimeframeStatus {
 }
 
 export interface TradeBarStatus {
-  trad
+  tradeid: number;
+  symbol: string;
+  /** ISO 8601 timestamp string (Helsinki-tz from backend) */
+  date: string;
+  status: BarFetchStatus;
+  timeframes: BarTimeframeStatus[];
+  last_error?: string | null;
+}

@@ -140,6 +140,8 @@ class BarTimeframeStatus(BaseModel):
 class TradeBarStatus(BaseModel):
     """One row in GET /api/trades/bars-status?tradeids=..."""
     tradeid: int
+    symbol: str
+    date: datetime
     status: str  # 'pending' | 'fetching' | 'partial' | 'done' | 'error'
     timeframes: list[BarTimeframeStatus]
     last_error: Optional[str] = None

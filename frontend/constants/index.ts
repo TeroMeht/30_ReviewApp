@@ -4,16 +4,7 @@ export const sidebarLinks = [
     route: "/",
     label: "Home",
   },
-      {
-    imgURL: "/icons/money-send.svg",
-    route: "/execution",
-    label: "Execution",
-  },
-      {
-    imgURL: "/icons/money-send.svg",
-    route: "/trades",
-    label: "Trades",
-  },
+
       {
     imgURL: "/icons/transaction.svg",
     route: "/data-management",

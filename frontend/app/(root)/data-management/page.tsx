@@ -1,10 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { API_PREFIX } from "@/lib/api_prefix";
 import type {
+  BarFetchBatchResult,
   IbExecution,
   ManualTradeEntry,
+  TradeBarStatus,
   TradeSyncRequest,
   TradeSyncResult,
 } from "@/lib/types";
@@ -84,6 +86,24 @@ export default function DataManagementPage() {
   // body of the next /trades/sync POST. In-memory only — refresh wipes them.
   const [manualRows, setManualRows] = useState<ManualRow[]>([makeRow()]);
 
+  // /api/trades/fetch-bars-batch kicks off a background job that pulls bar
+  // data from IBKR for every trade missing any of the 3 timeframes. The
+  // server enforces the IB pacing rule (one ticker at a time). We poll
+  // /api/trades/bars-status to keep the per-trade pills in sync until
+  // every queued trade is no longer 'fetching'.
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketError, setMarketError] = useState<string | null>(null);
+  const [marketBatch, setMarketBatch] = useState<BarFetchBatchResult | null>(null);
+  const [marketStatus, setMarketStatus] = useState<TradeBarStatus[]>([]);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Stop polling on unmount.
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, []);
+
   const updateManualRow = (id: string, patch: Partial<ManualRow>) =>
     setManualRows((prev) =>
       prev.map((r) => (r.id === id ? { ...r, ...patch } : r))
@@ -162,6 +182,84 @@ export default function DataManagementPage() {
       setTradeError(e instanceof Error ? e.message : String(e));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const stopMarketPolling = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  };
+
+  const pollMarketStatus = async (tradeids: number[]): Promise<boolean> => {
+    // Returns true when nothing is still 'fetching' (i.e. it's safe to stop).
+    const params = tradeids.map((id) => `tradeids=${id}`).join("&");
+    const res = await fetch(`${API_PREFIX}/trades/bars-status?${params}`);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const j = await res.json();
+        if (j?.detail) detail = String(j.detail);
+      } catch {
+        /* keep status */
+      }
+      throw new Error(detail);
+    }
+    const data: TradeBarStatus[] = await res.json();
+    setMarketStatus(data);
+    return data.every((d) => d.status !== "fetching");
+  };
+
+  const handleUpdateMarketData = async () => {
+    setMarketLoading(true);
+    setMarketError(null);
+    setMarketBatch(null);
+    setMarketStatus([]);
+    stopMarketPolling();
+
+    try {
+      const res = await fetch(`${API_PREFIX}/trades/fetch-bars-batch`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const j = await res.json();
+          if (j?.detail) detail = String(j.detail);
+        } catch {
+          /* keep status */
+        }
+        throw new Error(detail);
+      }
+      const data: BarFetchBatchResult = await res.json();
+      setMarketBatch(data);
+
+      // Nothing scheduled => nothing to poll.
+      if (data.tradeids.length === 0) {
+        setMarketLoading(false);
+        return;
+      }
+
+      // Prime the table with one immediate poll, then poll every 2s until
+      // the backend reports no trade is in 'fetching' state.
+      await pollMarketStatus(data.tradeids);
+      pollTimerRef.current = setInterval(async () => {
+        try {
+          const done = await pollMarketStatus(data.tradeids);
+          if (done) {
+            stopMarketPolling();
+            setMarketLoading(false);
+          }
+        } catch (e) {
+          stopMarketPolling();
+          setMarketError(e instanceof Error ? e.message : String(e));
+          setMarketLoading(false);
+        }
+      }, 2000);
+    } catch (e) {
+      setMarketError(e instanceof Error ? e.message : String(e));
+      setMarketLoading(false);
     }
   };
 
@@ -509,6 +607,117 @@ export default function DataManagementPage() {
           </div>
         )}
       </section>
+
+      {/* ─── Update Market Data ─────────────────────────────────────────── */}
+      <section className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+        <div className="px-4 py-3 border-b border-slate-200 bg-white flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold">Update Market Data</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Pull daily / 30-min / 2-min bars from IBKR for every trade
+              missing data. One ticker fetches at a time (IB pacing); the
+              three timeframes for each ticker run concurrently. Bar
+              timestamps are stored in Europe/Helsinki.
+            </p>
+          </div>
+          <button
+            onClick={handleUpdateMarketData}
+            disabled={marketLoading}
+            className="px-4 py-2 text-sm bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50"
+          >
+            {marketLoading ? "Fetching…" : "Update Market Data"}
+          </button>
+        </div>
+
+        {marketError && (
+          <div className="text-sm px-4 py-2 border-b bg-red-50 border-red-200 text-red-700">
+            {marketError}
+          </div>
+        )}
+
+        {marketBatch && (
+          <div className="px-4 py-2 text-sm border-b border-slate-200 bg-slate-50 flex flex-wrap gap-3 items-center">
+            {marketBatch.scheduled > 0 ? (
+              <Pill bg="rgba(59,130,246,0.14)" fg="#1d4ed8">
+                {marketBatch.scheduled} trade
+                {marketBatch.scheduled === 1 ? "" : "s"} queued
+              </Pill>
+            ) : (
+              <span className="font-medium text-slate-700">
+                Nothing to fetch — every trade already has bar data.
+              </span>
+            )}
+            {marketBatch.skipped_already_fetching.length > 0 && (
+              <Pill bg="rgba(100,116,139,0.12)" fg="#475569">
+                {marketBatch.skipped_already_fetching.length} skipped (already
+                fetching)
+              </Pill>
+            )}
+          </div>
+        )}
+
+        {marketStatus.length > 0 && (
+          <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-600 sticky top-0">
+                <tr>
+                  <Th>Trade ID</Th>
+                  <Th>Symbol</Th>
+                  <Th>Date</Th>
+                  <Th>Status</Th>
+                  <Th className="text-right">Daily</Th>
+                  <Th className="text-right">30 min</Th>
+                  <Th className="text-right">2 min</Th>
+                  <Th>Last Error</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {marketStatus.map((s) => {
+                  const colors = barStatusColors(s.status);
+                  const tfRows = (label: string) =>
+                    s.timeframes.find((t) => t.timeframe === label)?.rows ?? 0;
+                  return (
+                    <tr
+                      key={s.tradeid}
+                      className="border-t border-slate-100 hover:bg-slate-50"
+                    >
+                      <Td className="text-slate-500 tabular-nums">
+                        {s.tradeid}
+                      </Td>
+                      <Td className="font-mono font-semibold">{s.symbol}</Td>
+                      <Td className="whitespace-nowrap">{fmtDate(s.date)}</Td>
+                      <Td>
+                        <Pill bg={colors.bg} fg={colors.fg}>
+                          {s.status}
+                        </Pill>
+                      </Td>
+                      <Td className="text-right tabular-nums">
+                        {tfRows("daily").toLocaleString()}
+                      </Td>
+                      <Td className="text-right tabular-nums">
+                        {tfRows("30min").toLocaleString()}
+                      </Td>
+                      <Td className="text-right tabular-nums">
+                        {tfRows("2min").toLocaleString()}
+                      </Td>
+                      <Td className="text-xs text-red-700">
+                        {s.last_error ?? ""}
+                      </Td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {marketBatch === null && !marketLoading && !marketError && (
+          <div className="px-4 py-8 text-center text-sm text-slate-500">
+            Press <strong>Update Market Data</strong> to fetch missing bars
+            from IBKR.
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -519,7 +728,7 @@ function Th({
   children,
   className = "",
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   className?: string;
 }) {
   return (
@@ -558,4 +767,20 @@ function Pill({
       {children}
     </span>
   );
+}
+
+function barStatusColors(status: string): { bg: string; fg: string } {
+  switch (status) {
+    case "done":
+      return { bg: "rgba(22,163,74,0.12)", fg: "#15803d" };
+    case "fetching":
+      return { bg: "rgba(59,130,246,0.14)", fg: "#1d4ed8" };
+    case "partial":
+      return { bg: "rgba(234,179,8,0.16)", fg: "#a16207" };
+    case "error":
+      return { bg: "rgba(220,38,38,0.14)", fg: "#b91c1c" };
+    case "pending":
+    default:
+      return { bg: "rgba(100,116,139,0.12)", fg: "#475569" };
+  }
 }
