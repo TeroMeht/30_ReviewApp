@@ -1,0 +1,282 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 880" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow-fk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="crow-many" viewBox="0 0 14 14" refX="13" refY="7" markerWidth="14" markerHeight="14" orient="auto">
+      <path d="M 0 7 L 13 1 M 0 7 L 13 7 M 0 7 L 13 13" stroke="#475569" stroke-width="1.4" fill="none"/>
+    </marker>
+    <marker id="bar-one" viewBox="0 0 14 14" refX="2" refY="7" markerWidth="14" markerHeight="14" orient="auto">
+      <path d="M 6 0 L 6 14" stroke="#475569" stroke-width="1.6" fill="none"/>
+    </marker>
+
+    <style>
+      .title       { font-size: 22px; font-weight: 700; fill: #0f172a; }
+      .subtitle    { font-size: 13px; fill: #475569; }
+      .legend      { font-size: 11px; fill: #475569; }
+      .table-bg    { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 8; ry: 8; }
+      .table-bg-hub{ fill: #ffffff; stroke: #1d4ed8; stroke-width: 2;   rx: 8; ry: 8; }
+      .table-hdr   { fill: #1e293b; rx: 8 8 0 0; }
+      .table-hdr-hub { fill: #1d4ed8; }
+      .table-hdr-bar { fill: #0f766e; }
+      .table-hdr-exec{ fill: #7c3aed; }
+      .table-name  { font-size: 14px; font-weight: 700; fill: #ffffff; }
+      .table-tag   { font-size: 10px; fill: #cbd5e1; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; }
+      .col-pk      { font-size: 12px; fill: #0f172a; font-weight: 700; }
+      .col-fk      { font-size: 12px; fill: #1d4ed8; font-weight: 600; }
+      .col         { font-size: 12px; fill: #334155; }
+      .col-type    { font-size: 11px; fill: #64748b; }
+      .col-note    { font-size: 10px; fill: #94a3b8; font-style: italic; }
+      .row-divider { stroke: #e2e8f0; stroke-width: 0.8; }
+      .rel-line    { stroke: #475569; stroke-width: 1.6; fill: none; }
+      .rel-label   { font-size: 11px; fill: #1e293b; font-weight: 600; }
+      .rel-detail  { font-size: 10px; fill: #64748b; }
+      .uniq-pill   { font-size: 9px; font-weight: 700; fill: #0f766e; letter-spacing: 0.05em; }
+      .badge-pk    { font-size: 9px; font-weight: 700; fill: #ffffff; }
+      .badge-fk    { font-size: 9px; font-weight: 700; fill: #ffffff; }
+    </style>
+  </defs>
+
+  <title>30_ReviewApp database schema</title>
+  <desc>Entity-relationship diagram for the trades, executions, and per-timeframe bar tables in PostgreSQL.</desc>
+
+  <!-- Title -->
+  <text x="40" y="42" class="title">30_ReviewApp · database schema</text>
+  <text x="40" y="64" class="subtitle">PostgreSQL · asyncpg · timestamps in TIMESTAMPTZ (Helsinki for bars, UTC for executions)</text>
+
+  <!-- ── EXECUTIONS table ─────────────────────────────────────────────── -->
+  <g transform="translate(40,110)">
+    <rect class="table-bg" width="320" height="320"/>
+    <rect class="table-hdr table-hdr-exec" width="320" height="42"/>
+    <rect class="table-hdr table-hdr-exec" x="0" y="34" width="320" height="8"/>
+    <text x="16" y="20" class="table-tag">Source · IB Flex</text>
+    <text x="16" y="36" class="table-name">executions</text>
+
+    <!-- Columns -->
+    <g transform="translate(16,68)">
+      <text x="0" y="0" class="col-pk">🔑 tradeid</text>
+      <text x="160" y="0" class="col-type">TEXT</text>
+      <text x="0" y="14" class="col-note">IB per-fill execId</text>
+
+      <line x1="-12" y1="28" x2="304" y2="28" class="row-divider"/>
+
+      <text x="0" y="46" class="col">datetime</text>
+      <text x="160" y="46" class="col-type">TIMESTAMPTZ</text>
+      <text x="0" y="60" class="col-note">UTC fill timestamp</text>
+      <line x1="-12" y1="74" x2="304" y2="74" class="row-divider"/>
+
+      <text x="0" y="92" class="col">symbol</text>
+      <text x="160" y="92" class="col-type">TEXT</text>
+      <line x1="-12" y1="106" x2="304" y2="106" class="row-divider"/>
+
+      <text x="0" y="124" class="col">buysell</text>
+      <text x="160" y="124" class="col-type">TEXT</text>
+      <line x1="-12" y1="138" x2="304" y2="138" class="row-divider"/>
+
+      <text x="0" y="156" class="col">quantity</text>
+      <text x="160" y="156" class="col-type">INTEGER</text>
+      <line x1="-12" y1="170" x2="304" y2="170" class="row-divider"/>
+
+      <text x="0" y="188" class="col">tradeprice</text>
+      <text x="160" y="188" class="col-type">NUMERIC(10,3)</text>
+      <line x1="-12" y1="202" x2="304" y2="202" class="row-divider"/>
+
+      <text x="0" y="220" class="col">iborderid</text>
+      <text x="160" y="220" class="col-type">TEXT</text>
+      <line x1="-12" y1="234" x2="304" y2="234" class="row-divider"/>
+
+      <text x="0" y="252" class="col">ibcommission</text>
+      <text x="160" y="252" class="col-type">NUMERIC</text>
+    </g>
+  </g>
+
+  <!-- ── TRADES table (hub) ───────────────────────────────────────────── -->
+  <g transform="translate(460,110)">
+    <rect class="table-bg-hub" width="320" height="320"/>
+    <rect class="table-hdr table-hdr-hub" width="320" height="42"/>
+    <text x="16" y="20" class="table-tag">Hub · 1 row per (symbol, day)</text>
+    <text x="16" y="36" class="table-name">trades</text>
+
+    <g transform="translate(16,68)">
+      <text x="0" y="0" class="col-pk">🔑 tradeid</text>
+      <text x="160" y="0" class="col-type">SERIAL</text>
+      <line x1="-12" y1="14" x2="304" y2="14" class="row-divider"/>
+
+      <text x="0" y="32" class="col">symbol</text>
+      <text x="160" y="32" class="col-type">TEXT</text>
+      <line x1="-12" y1="46" x2="304" y2="46" class="row-divider"/>
+
+      <text x="0" y="64" class="col">date</text>
+      <text x="160" y="64" class="col-type">TIMESTAMPTZ</text>
+      <line x1="-12" y1="78" x2="304" y2="78" class="row-divider"/>
+
+      <text x="0" y="96" class="col">setup</text>
+      <text x="160" y="96" class="col-type">TEXT</text>
+      <line x1="-12" y1="110" x2="304" y2="110" class="row-divider"/>
+
+      <text x="0" y="128" class="col">price_action_rating</text>
+      <text x="200" y="128" class="col-type">INTEGER (1–5)</text>
+      <line x1="-12" y1="142" x2="304" y2="142" class="row-divider"/>
+
+      <text x="0" y="160" class="col">price_position</text>
+      <text x="160" y="160" class="col-type">INTEGER</text>
+      <line x1="-12" y1="174" x2="304" y2="174" class="row-divider"/>
+
+      <text x="0" y="192" class="col">category</text>
+      <text x="160" y="192" class="col-type">TEXT</text>
+      <line x1="-12" y1="206" x2="304" y2="206" class="row-divider"/>
+
+      <text x="0" y="224" class="col">notes</text>
+      <text x="160" y="224" class="col-type">TEXT</text>
+    </g>
+
+    <!-- Unique constraint pill -->
+    <g transform="translate(16,300)">
+      <rect width="288" height="20" rx="4" ry="4" fill="#ecfdf5" stroke="#10b981" stroke-width="1"/>
+      <text x="8" y="14" class="uniq-pill">UNIQUE (symbol, date AT TIME ZONE 'Europe/Helsinki')</text>
+    </g>
+  </g>
+
+  <!-- ── Sidebar: writers/readers ─────────────────────────────────────── -->
+  <g transform="translate(880,110)">
+    <rect width="320" height="320" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" rx="8" ry="8"/>
+    <text x="16" y="24" font-size="13" font-weight="700" fill="#0f172a">How rows arrive</text>
+
+    <g transform="translate(16,42)" font-size="11" fill="#334155">
+      <circle cx="6" cy="6" r="4" fill="#7c3aed"/>
+      <text x="20" y="10" font-weight="600">executions</text>
+      <text x="20" y="26" fill="#64748b">POST /api/executions/ib</text>
+      <text x="20" y="40" fill="#64748b">→ Flex Web Service → insert</text>
+
+      <circle cx="6" cy="68" r="4" fill="#1d4ed8"/>
+      <text x="20" y="72" font-weight="600">trades</text>
+      <text x="20" y="88" fill="#64748b">POST /api/trades/sync</text>
+      <text x="20" y="102" fill="#64748b">manual rows + auto-bucket from</text>
+      <text x="20" y="114" fill="#64748b">unlinked executions, then UPDATE</text>
+      <text x="20" y="126" fill="#64748b">executions.trade_fk</text>
+
+      <circle cx="6" cy="156" r="4" fill="#0f766e"/>
+      <text x="20" y="160" font-weight="600">trade_bars_*</text>
+      <text x="20" y="176" fill="#64748b">POST /api/trades/fetch-bars-batch</text>
+      <text x="20" y="190" fill="#64748b">→ ib_async historical bars</text>
+      <text x="20" y="204" fill="#64748b">→ converted to Europe/Helsinki</text>
+      <text x="20" y="218" fill="#64748b">→ ON CONFLICT DO NOTHING</text>
+
+      <line x1="0" y1="240" x2="288" y2="240" stroke="#cbd5e1" stroke-width="0.8"/>
+
+      <text x="0" y="260" font-weight="600" fill="#0f172a">Concurrency</text>
+      <text x="0" y="276" fill="#64748b">Single asyncio.Lock serialises</text>
+      <text x="0" y="288" fill="#64748b">tickers; 3 timeframes per ticker</text>
+      <text x="0" y="300" fill="#64748b">run via asyncio.gather.</text>
+    </g>
+  </g>
+
+  <!-- ── BAR TABLES (3 across the bottom) ─────────────────────────────── -->
+  <g transform="translate(40,540)">
+    <rect class="table-bg" width="320" height="280"/>
+    <rect class="table-hdr table-hdr-bar" width="320" height="42"/>
+    <text x="16" y="20" class="table-tag">Per-timeframe bars</text>
+    <text x="16" y="36" class="table-name">trade_bars_daily</text>
+
+    <g transform="translate(16,68)">
+      <text x="0" y="0" class="col-pk">🔑 tradeid</text>
+      <text x="160" y="0" class="col-fk">FK → trades</text>
+      <line x1="-12" y1="14" x2="304" y2="14" class="row-divider"/>
+      <text x="0" y="32" class="col-pk">🔑 time</text>
+      <text x="160" y="32" class="col-type">TIMESTAMPTZ (HEL)</text>
+      <line x1="-12" y1="46" x2="304" y2="46" class="row-divider"/>
+      <text x="0" y="64" class="col">open / high / low / close</text>
+      <text x="0" y="78" class="col-type">NUMERIC(14, 4)</text>
+      <line x1="-12" y1="92" x2="304" y2="92" class="row-divider"/>
+      <text x="0" y="110" class="col">volume</text>
+      <text x="160" y="110" class="col-type">BIGINT</text>
+      <line x1="-12" y1="124" x2="304" y2="124" class="row-divider"/>
+      <text x="0" y="142" class="col-note">PK (tradeid, time) · idempotent upsert</text>
+      <text x="0" y="156" class="col-note">durationStr = '1 Y' · barSize = '1 day'</text>
+      <text x="0" y="170" class="col-note">ON DELETE CASCADE</text>
+    </g>
+  </g>
+
+  <g transform="translate(420,540)">
+    <rect class="table-bg" width="320" height="280"/>
+    <rect class="table-hdr table-hdr-bar" width="320" height="42"/>
+    <text x="16" y="20" class="table-tag">Per-timeframe bars</text>
+    <text x="16" y="36" class="table-name">trade_bars_30min</text>
+
+    <g transform="translate(16,68)">
+      <text x="0" y="0" class="col-pk">🔑 tradeid</text>
+      <text x="160" y="0" class="col-fk">FK → trades</text>
+      <line x1="-12" y1="14" x2="304" y2="14" class="row-divider"/>
+      <text x="0" y="32" class="col-pk">🔑 time</text>
+      <text x="160" y="32" class="col-type">TIMESTAMPTZ (HEL)</text>
+      <line x1="-12" y1="46" x2="304" y2="46" class="row-divider"/>
+      <text x="0" y="64" class="col">open / high / low / close</text>
+      <text x="0" y="78" class="col-type">NUMERIC(14, 4)</text>
+      <line x1="-12" y1="92" x2="304" y2="92" class="row-divider"/>
+      <text x="0" y="110" class="col">volume</text>
+      <text x="160" y="110" class="col-type">BIGINT</text>
+      <line x1="-12" y1="124" x2="304" y2="124" class="row-divider"/>
+      <text x="0" y="142" class="col-note">PK (tradeid, time) · idempotent upsert</text>
+      <text x="0" y="156" class="col-note">durationStr = '30 D' · barSize = '30 mins'</text>
+      <text x="0" y="170" class="col-note">ON DELETE CASCADE</text>
+    </g>
+  </g>
+
+  <g transform="translate(800,540)">
+    <rect class="table-bg" width="320" height="280"/>
+    <rect class="table-hdr table-hdr-bar" width="320" height="42"/>
+    <text x="16" y="20" class="table-tag">Per-timeframe bars</text>
+    <text x="16" y="36" class="table-name">trade_bars_2min</text>
+
+    <g transform="translate(16,68)">
+      <text x="0" y="0" class="col-pk">🔑 tradeid</text>
+      <text x="160" y="0" class="col-fk">FK → trades</text>
+      <line x1="-12" y1="14" x2="304" y2="14" class="row-divider"/>
+      <text x="0" y="32" class="col-pk">🔑 time</text>
+      <text x="160" y="32" class="col-type">TIMESTAMPTZ (HEL)</text>
+      <line x1="-12" y1="46" x2="304" y2="46" class="row-divider"/>
+      <text x="0" y="64" class="col">open / high / low / close</text>
+      <text x="0" y="78" class="col-type">NUMERIC(14, 4)</text>
+      <line x1="-12" y1="92" x2="304" y2="92" class="row-divider"/>
+      <text x="0" y="110" class="col">volume</text>
+      <text x="160" y="110" class="col-type">BIGINT</text>
+      <line x1="-12" y1="124" x2="304" y2="124" class="row-divider"/>
+      <text x="0" y="142" class="col-note">PK (tradeid, time) · idempotent upsert</text>
+      <text x="0" y="156" class="col-note">durationStr = '5 D' · barSize = '2 mins'</text>
+      <text x="0" y="170" class="col-note">ON DELETE CASCADE</text>
+    </g>
+  </g>
+
+  <!-- ── Relationships ────────────────────────────────────────────────── -->
+  <!-- executions.trade_fk → trades.tradeid (many to one, ON DELETE SET NULL) -->
+  <g>
+    <line x1="360" y1="270" x2="460" y2="270" class="rel-line"
+          marker-start="url(#crow-many)" marker-end="url(#bar-one)"/>
+    <text x="370" y="258" class="rel-label">trade_fk</text>
+    <text x="370" y="288" class="rel-detail">N : 1 · ON DELETE SET NULL</text>
+  </g>
+
+  <!-- trades → trade_bars_daily (one to many, ON DELETE CASCADE) -->
+  <g>
+    <path d="M 540 430 C 540 470, 200 490, 200 540" class="rel-line"
+          marker-start="url(#bar-one)" marker-end="url(#crow-many)"/>
+    <text x="240" y="478" class="rel-detail">1 : N  CASCADE</text>
+  </g>
+  <!-- trades → trade_bars_30min -->
+  <g>
+    <line x1="620" y1="430" x2="580" y2="540" class="rel-line"
+          marker-start="url(#bar-one)" marker-end="url(#crow-many)"/>
+    <text x="610" y="488" class="rel-detail">1 : N  CASCADE</text>
+  </g>
+  <!-- trades → trade_bars_2min -->
+  <g>
+    <path d="M 700 430 C 700 470, 960 490, 960 540" class="rel-line"
+          marker-start="url(#bar-one)" marker-end="url(#crow-many)"/>
+    <text x="850" y="478" class="rel-detail">1 : N  CASCADE</text>
+  </g>
+
+  <!-- ── Legend ───────────────────────────────────────────────────────── -->
+  <g transform="translate(40,840)">
+    <text x="0" y="0" class="legend">🔑 primary key &#160;·&#160; <tspan fill="#1d4ed8" font-weight="600">FK</tspan> foreign key &#160;·&#160; bar timestamps stored as Europe/Helsinki TIMESTAMPTZ &#160;·&#160; relationship notation: ⏐⊏ many · ⊐⏐ one</text>
+  </g>
+</svg>
