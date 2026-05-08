@@ -17,6 +17,7 @@ import asyncpg
 from datetime import datetime, time
 from typing import Optional
 from zoneinfo import ZoneInfo
+from helpers.example import normalize_symbol
 from schemas.api_schemas import (
     Trade,
     TradeCreate,
@@ -239,7 +240,11 @@ async def insert_manual_trades(
     normalised: list[tuple[str, datetime]] = []
     in_memory_dupes: list[tuple[str, str]] = []
     for e in entries:
-        sym = e.symbol.strip().upper()
+        # Same canonicalisation as IB-sourced executions: trim, drop CFD
+        # 'n' suffix if present, uppercase. Manual entries shouldn't carry
+        # the suffix in practice but defensive normalisation keeps the
+        # (symbol, day) unique index consistent across sources.
+        sym = normalize_symbol(e.symbol)
         if not sym:
             # Skip empty symbols defensively — schema requires min_length=1
             # so this is just belt-and-braces.

@@ -42,6 +42,7 @@ _UTC = ZoneInfo("UTC")
 import httpx
 
 from core.config import settings
+from helpers.example import normalize_symbol
 from schemas.api_schemas import Execution
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,12 @@ def parse_flex_executions(xml_body: str) -> list[Execution]:
         out.append(
             Execution(
                 dateTime=ts,
-                symbol=(_row_get(trade_elem, "symbol") or "").strip(),
+                # Normalise here (not later) so executions.symbol is the
+                # canonical underlying ticker. Trade auto-bucketing groups
+                # by executions.symbol, so any cleanup HAS to happen at
+                # insert time or the JOIN in sync_trades_from_executions
+                # won't link CFD-derived rows.
+                symbol=normalize_symbol(_row_get(trade_elem, "symbol") or ""),
                 tradeID=(_row_get(trade_elem, "tradeID") or "").strip(),
                 buySell=_action_for_buy_sell(_row_get(trade_elem, "buySell")),
                 quantity=quantity,
