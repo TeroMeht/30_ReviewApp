@@ -8,18 +8,28 @@ from dependencies import get_db_conn, get_db_pool, get_ib
 from schemas.api_schemas import (
     Trade,
     TradeCreate,
+    TradeUpdate,
     TradeSyncRequest,
     TradeSyncResult,
     BarFetchBatchResult,
     BarTimeframeStatus,
     TradeBarStatus,
+    Execution,
+    BarRow as BarRowSchema,
+    BarsResponse,
+    NeighborTrades,
 )
 from db.trades import (
     insert_trade,
     insert_manual_trades,
     sync_trades_from_executions,
+    fetch_trades,
+    fetch_trade_by_id,
+    update_trade,
+    delete_trade,
+    LOCAL_TZ,
 )
-from db.trade_bars import TIMEFRAMES
+from db.trade_bars import TIMEFRAMES, TIMEFRAME_BY_LABEL
 from services.ib_bars import (
     schedule_bar_fetch_batch,
     find_incomplete_tradeids,
@@ -200,3 +210,244 @@ async def bars_status(
             last_error=get_last_error(tid),
         ))
     return out
+
+
+# ─── Trade CRUD + Review-page reads ───────────────────────────────────────────
+
+@router.get("", response_model=list[Trade])
+async def list_trades(
+    year: Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
+    db_conn=Depends(get_db_conn),
+):
+    """List trades. With year/month filters or unfiltered (all)."""
+    try:
+        return await fetch_trades(db_conn, year=year, month=month)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list trades: {e}")
+
+
+@router.get("/latest", response_model=Trade)
+async def get_latest_trade(db_conn=Depends(get_db_conn)):
+    """Return the trade with the largest `date`. Default landing row for the review page."""
+    row = await db_conn.fetchrow(
+        """
+        SELECT tradeid, symbol, date, setup, price_action_rating,
+               price_position, category, notes
+        FROM trades
+        ORDER BY date DESC, tradeid DESC
+        LIMIT 1
+        """
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="No trades yet.")
+    return Trade(**dict(row))
+
+
+@router.get("/{tradeid}", response_model=Trade)
+async def get_trade(tradeid: int, db_conn=Depends(get_db_conn)):
+    try:
+        return await fetch_trade_by_id(db_conn, tradeid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trade: {e}")
+
+
+@router.patch("/{tradeid}", response_model=Trade)
+async def patch_trade(tradeid: int, payload: TradeUpdate, db_conn=Depends(get_db_conn)):
+    try:
+        return await update_trade(db_conn, tradeid, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update trade: {e}")
+
+
+@router.delete("/{tradeid}")
+async def remove_trade(tradeid: int, db_conn=Depends(get_db_conn)):
+    try:
+        await delete_trade(db_conn, tradeid)
+        return {"deleted": tradeid}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete trade: {e}")
+
+
+@router.get("/{tradeid}/executions", response_model=list[Execution])
+async def list_trade_executions(tradeid: int, db_conn=Depends(get_db_conn)):
+    """All executions linked to this trade (via executions.trade_fk = tradeid),
+    ordered by fill time. Shape matches the existing Execution schema."""
+    rows = await db_conn.fetch(
+        """
+        SELECT  tradeid    AS "tradeID",
+                datetime   AS "dateTime",
+                symbol,
+                buysell    AS "buySell",
+                quantity,
+                tradeprice AS "tradePrice",
+                iborderid  AS "ibOrderID",
+                ibcommission AS "ibCommission"
+        FROM    executions
+        WHERE   trade_fk = $1
+        ORDER BY datetime ASC
+        """,
+        tradeid,
+    )
+    return [Execution(**dict(r)) for r in rows]
+
+
+@router.get("/{tradeid}/bars", response_model=BarsResponse)
+async def get_trade_bars(
+    tradeid: int,
+    timeframe: str = Query(..., description="daily | 30min | 2min"),
+    db_conn=Depends(get_db_conn),
+):
+    """All bars for (tradeid, timeframe) ordered chronologically.
+    The full set is returned — bar counts per timeframe stay well under
+    1000 (1Y daily ~250, 30D 30min ~390, 5D 2min ~975) so we don't
+    paginate. Charts manage their own visible window."""
+    tf = TIMEFRAME_BY_LABEL.get(timeframe)
+    if tf is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown timeframe '{timeframe}'. Use one of: "
+                   f"{', '.join(t.label for t in TIMEFRAMES)}.",
+        )
+    try:
+        trade = await fetch_trade_by_id(db_conn, tradeid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    rows = await db_conn.fetch(
+        f"""
+        SELECT time, open, high, low, close, volume
+        FROM   {tf.table}
+        WHERE  tradeid = $1
+        ORDER BY time ASC
+        """,
+        tradeid,
+    )
+    bars = [
+        BarRowSchema(
+            time=r["time"],
+            open=r["open"], high=r["high"], low=r["low"], close=r["close"],
+            volume=int(r["volume"]),
+        )
+        for r in rows
+    ]
+    return BarsResponse(
+        tradeid=tradeid, symbol=trade.symbol, timeframe=tf.label, bars=bars,
+    )
+
+
+@router.get("/{tradeid}/neighbors", response_model=NeighborTrades)
+async def get_trade_neighbors(tradeid: int, db_conn=Depends(get_db_conn)):
+    """Adjacent tradeids in date order.
+
+    Convention (matches user mental model):
+      * prev_id = ONE STEP BACK IN TIME (older trade)
+      * next_id = ONE STEP FORWARD IN TIME (newer trade)
+
+    Ties are broken by tradeid so two trades sharing the same `date`
+    still have a deterministic order.
+    """
+    try:
+        current = await fetch_trade_by_id(db_conn, tradeid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    # Older trade: (date, tradeid) STRICTLY less than the current.
+    prev_row = await db_conn.fetchrow(
+        """
+        SELECT tradeid FROM trades
+        WHERE  (date, tradeid) < ($1::timestamptz, $2::int)
+        ORDER BY date DESC, tradeid DESC
+        LIMIT 1
+        """,
+        current.date, current.tradeid,
+    )
+    # Newer trade: (date, tradeid) STRICTLY greater than the current.
+    next_row = await db_conn.fetchrow(
+        """
+        SELECT tradeid FROM trades
+        WHERE  (date, tradeid) > ($1::timestamptz, $2::int)
+        ORDER BY date ASC, tradeid ASC
+        LIMIT 1
+        """,
+        current.date, current.tradeid,
+    )
+    return NeighborTrades(
+        current=tradeid,
+        prev_id=int(prev_row["tradeid"]) if prev_row else None,
+        next_id=int(next_row["tradeid"]) if next_row else None,
+    )
+
+
+@router.get("/{tradeid}/week", response_model=list[Trade])
+async def get_trades_in_week(tradeid: int, db_conn=Depends(get_db_conn)):
+    """All trades in the Mon–Sun Helsinki week that contains this trade.
+
+    Used by the 'Weekly trades' table on the Trade Review page so the
+    user can see the rest of the week at a glance. Sorted oldest → newest.
+    """
+    try:
+        await fetch_trade_by_id(db_conn, tradeid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    rows = await db_conn.fetch(
+        f"""
+        WITH ref AS (
+          SELECT date_trunc(
+            'week',
+            (date AT TIME ZONE '{LOCAL_TZ}')::date::timestamp
+          ) AS week_start
+          FROM trades WHERE tradeid = $1
+        )
+        SELECT t.tradeid, t.symbol, t.date, t.setup, t.price_action_rating,
+               t.price_position, t.category, t.notes
+        FROM   trades t, ref
+        WHERE  date_trunc(
+                 'week',
+                 (t.date AT TIME ZONE '{LOCAL_TZ}')::date::timestamp
+               ) = ref.week_start
+        ORDER BY t.date ASC, t.tradeid ASC
+        """,
+        tradeid,
+    )
+    return [Trade(**dict(r)) for r in rows]
+
+@router.get("/{tradeid}/day", response_model=list[Trade])
+async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
+    """All trades on the same Helsinki calendar day as this trade.
+
+    Ordered by each trade's earliest linked execution timestamp (so the
+    trade that fired first in real time is first in the table). Trades
+    with no executions yet fall back to NULLS LAST + tradeid.
+    """
+    try:
+        await fetch_trade_by_id(db_conn, tradeid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    rows = await db_conn.fetch(
+        f"""
+        WITH ref AS (
+          SELECT (date AT TIME ZONE '{LOCAL_TZ}')::date AS local_day
+          FROM   trades WHERE tradeid = $1
+        )
+        SELECT  t.tradeid, t.symbol, t.date, t.setup, t.price_action_rating,
+                t.price_position, t.category, t.notes,
+                COUNT(DISTINCT e.iborderid)::int AS execution_count
+        FROM    trades t
+        LEFT JOIN executions e ON e.trade_fk = t.tradeid
+        WHERE   (t.date AT TIME ZONE '{LOCAL_TZ}')::date = (SELECT local_day FROM ref)
+        GROUP BY t.tradeid
+        ORDER BY MIN(e.datetime) ASC NULLS LAST, t.tradeid ASC
+        """,
+        tradeid,
+    )
+    return [Trade(**dict(r)) for r in rows]
+

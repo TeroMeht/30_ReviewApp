@@ -32,7 +32,13 @@ class CategoryUpdate(BaseModel):
 # ─── Trade Models ─────────────────────────────────────────────────────────────
 
 class Trade(BaseModel):
-    """A trade row as stored / returned from the DB."""
+    """A trade row as stored / returned from the DB.
+
+    `execution_count` is opt-in: most endpoints leave it as None. The
+    /trades/{id}/day endpoint populates it with COUNT(DISTINCT iborderid)
+    so the daily table can show how many distinct orders made up each
+    trade (multiple fills sharing the same iborderid count as one).
+    """
     tradeid: int
     symbol: str
     date: datetime
@@ -41,6 +47,7 @@ class Trade(BaseModel):
     price_position: Optional[int] = None
     category: Optional[str] = None
     notes: Optional[str] = None
+    execution_count: Optional[int] = None
 
 
 class TradeCreate(BaseModel):
@@ -145,3 +152,29 @@ class TradeBarStatus(BaseModel):
     status: str  # 'pending' | 'fetching' | 'partial' | 'done' | 'error'
     timeframes: list[BarTimeframeStatus]
     last_error: Optional[str] = None
+
+
+# ─── Bars read (for Trade Review charts) ──────────────────────────────────────
+
+class BarRow(BaseModel):
+    """One OHLCV row, returned by GET /api/trades/{id}/bars."""
+    time: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+
+
+class BarsResponse(BaseModel):
+    tradeid: int
+    symbol: str
+    timeframe: str
+    bars: list[BarRow]
+
+
+class NeighborTrades(BaseModel):
+    """Prev/next tradeids by date order (newest -> oldest)."""
+    current: int
+    prev_id: Optional[int] = None  # newer than current (one step back in time order)
+    next_id: Optional[int] = None  # older than current

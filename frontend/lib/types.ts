@@ -38,6 +38,9 @@ export interface Trade {
   price_position: number | null;
   category: string | null;
   notes: string | null;
+  /** Distinct iborderids linked to this trade. Populated by the
+   *  /trades/{id}/day endpoint; null on every other read. */
+  execution_count?: number | null;
 }
 
 /** Body for POST /api/trades */
@@ -172,4 +175,31 @@ export interface TradeBarStatus {
   status: BarFetchStatus;
   timeframes: BarTimeframeStatus[];
   last_error?: string | null;
+}
+
+// ─── Trade Review (bars + neighbors) ─────────────────────────────────────────
+
+export type Timeframe = "daily" | "30min" | "2min";
+
+export interface Bar {
+  /** ISO 8601 timestamp string */
+  time: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: number;
+}
+
+export interface BarsResponse {
+  tradeid: number;
+  symbol: string;
+  timeframe: Timeframe;
+  bars: Bar[];
+}
+
+export interface NeighborTrades {
+  current: number;
+  prev_id: number | null;
+  next_id: number | null;
 }
