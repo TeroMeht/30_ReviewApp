@@ -18,6 +18,7 @@ import {
   createChart,
   CandlestickSeries,
   HistogramSeries,
+  LineSeries,
   createSeriesMarkers,
   type IChartApi,
   type ISeriesApi,
@@ -26,8 +27,9 @@ import {
   type UTCTimestamp,
   ColorType,
   CrosshairMode,
+  LineStyle,
 } from "lightweight-charts";
-import type { Bar, IbExecution, Timeframe } from "@/lib/types";
+import type { Bar, IbExecution, IndicatorSeries, Timeframe } from "@/lib/types";
 
 interface Props {
   bars: Bar[];
@@ -35,6 +37,8 @@ interface Props {
   timeframe: Timeframe;
   label: string;
   height?: number;
+  /** Optional overlays (EMA, VWAP, …) — one LineSeries per entry. */
+  indicators?: IndicatorSeries[];
 }
 
 const HELSINKI_FMT = new Intl.DateTimeFormat("en-GB", {
@@ -93,11 +97,26 @@ export default function TradeChart({
   timeframe,
   label,
   height = 320,
+  indicators,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  // Keyed by indicator.name. Track pane + kind alongside the series so
+  // we can detect when an indicator switches pane/type and recreate it
+  // (those aren't mutable via applyOptions).
+  const indicatorSeriesRef = useRef<
+    Map<
+      string,
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        series: ISeriesApi<any>;
+        pane: number;
+        kind: "line" | "histogram";
+      }
+    >
+  >(new Map());
 
   useEffect(() => {
     const el = containerRef.current;
@@ -153,6 +172,9 @@ export default function TradeChart({
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      // Series are owned by the chart instance — `chart.remove()` disposes
+      // them; we just clear our lookup map.
+      indicatorSeriesRef.current.clear();
     };
   }, [height]);
 
@@ -179,8 +201,204 @@ export default function TradeChart({
 
     candles.setData(candleData);
     volume.setData(volumeData);
-    chartRef.current?.timeScale().fitContent();
-  }, [bars]);
+
+    // Default zoom — per-timeframe windows so each chart opens at a
+    // useful level of detail rather than fit-to-everything:
+    //   * 2-min  → last Helsinki calendar day (5-day buffer to scroll left)
+    //   * 30-min → last 10 calendar days       (30-day buffer behind)
+    //   * daily  → last 6 calendar months      (1-year buffer behind)
+    //
+    // helsinkiWallSeconds encodes Helsinki wall-clock as UTC seconds, so
+    // all date math below uses UTC functions on the Date object to stay
+    // in that same "wall-clock" frame.
+    const ts = chartRef.current?.timeScale();
+    if (!ts) return;
+
+    if (candleData.length > 0) {
+      const lastSec = candleData[candleData.length - 1].time as number;
+      let fromSec: number | null = null;
+
+      if (timeframe === "2min") {
+        // Midnight Helsinki of the last bar's day.
+        fromSec = Math.floor(lastSec / 86400) * 86400;
+      } else if (timeframe === "30min") {
+        // 10 days back from the last bar.
+        fromSec = lastSec - 10 * 86400;
+      } else if (timeframe === "daily") {
+        // 6 calendar months back — use Date math so month-lengths are
+        // handled correctly (180-day approximation drifts).
+        const d = new Date(lastSec * 1000);
+        d.setUTCMonth(d.getUTCMonth() - 6);
+        fromSec = Math.floor(d.getTime() / 1000);
+      }
+
+      if (fromSec !== null) {
+        // Snap to the first bar at or after the cutoff so the visible
+        // range always starts on a real candle.
+        const cutoff = fromSec;
+        const firstVisible = candleData.find(
+          (c) => (c.time as number) >= cutoff
+        );
+        if (firstVisible) {
+          ts.setVisibleRange({
+            from: firstVisible.time,
+            to: candleData[candleData.length - 1].time,
+          });
+          return;
+        }
+      }
+    }
+
+    ts.fitContent();
+  }, [bars, timeframe]);
+
+  // Indicator overlays.
+  //   pane 0  → drawn on top of candles (EMA, VWAP)
+  //   pane 1+ → stacked sub-panes below (Relatr, Rvol)
+  //   kind=line | histogram
+  //
+  // We key by `name` and recreate the series only when pane / kind change
+  // (those are constructor-time options in lightweight-charts).
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const desired = indicators ?? [];
+    const wantNames = new Set(desired.map((s) => s.name));
+
+    // Drop series the latest payload no longer carries.
+    for (const [name, entry] of indicatorSeriesRef.current) {
+      if (!wantNames.has(name)) {
+        try {
+          chart.removeSeries(entry.series);
+        } catch {
+          /* chart already torn down — safe to ignore */
+        }
+        indicatorSeriesRef.current.delete(name);
+      }
+    }
+
+    for (const ind of desired) {
+      const pane = ind.pane ?? 0;
+      const kind = (ind.series_type ?? "line") as "line" | "histogram";
+      const color = ind.color ?? "#0f172a";
+
+      let entry = indicatorSeriesRef.current.get(ind.name);
+
+      // Pane / kind are addSeries-time options — if they change, drop and
+      // recreate. (applyOptions can't move a series between panes.)
+      if (entry && (entry.pane !== pane || entry.kind !== kind)) {
+        try {
+          chart.removeSeries(entry.series);
+        } catch {
+          /* ignore */
+        }
+        indicatorSeriesRef.current.delete(ind.name);
+        entry = undefined;
+      }
+
+      if (!entry) {
+        const series =
+          kind === "histogram"
+            ? chart.addSeries(
+                HistogramSeries,
+                {
+                  color,
+                  priceLineVisible: false,
+                  lastValueVisible: false,
+                  base: 0,
+                },
+                pane
+              )
+            : chart.addSeries(
+                LineSeries,
+                {
+                  color,
+                  lineWidth: 1,
+                  priceLineVisible: false,
+                  lastValueVisible: false,
+                },
+                pane
+              );
+        entry = { series, pane, kind };
+        indicatorSeriesRef.current.set(ind.name, entry);
+
+        // Relatr reference levels: 0 (mid) and ±0.5 (typical reversion
+        // bands). createPriceLine is only called once at series-creation
+        // time so it doesn't accumulate duplicates across re-renders.
+        if (ind.name === "relatr") {
+          series.createPriceLine({
+            price: 0,
+            color: "#000000",
+            lineWidth: 1,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: "0",
+          });
+          series.createPriceLine({
+            price: 0.5,
+            color: "#000000",
+            lineWidth: 1,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: "+0.5",
+          });
+          series.createPriceLine({
+            price: -0.5,
+            color: "#000000",
+            lineWidth: 1,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: "-0.5",
+          });
+        }
+      } else {
+        entry.series.applyOptions({ color });
+      }
+
+      // Drop warm-up / undefined points — lightweight-charts wants
+      // strictly increasing time and finite numbers.
+      const data = ind.points
+        .filter(
+          (p): p is { time: string; value: number } =>
+            p.value !== null && p.value !== undefined && Number.isFinite(p.value)
+        )
+        .map((p) => ({
+          time: helsinkiWallSeconds(p.time),
+          value: p.value,
+        }));
+      entry.series.setData(data);
+    }
+
+    // Pane sizing in lightweight-charts v5 is driven by stretch factors,
+    // not absolute pixels. Default stretch is auto-assigned and ends up
+    // heavily favouring the price pane, which leaves the Relatr pane
+    // barely visible. Force a proportional split:
+    //   price : relatr : rvol  =  4 : 2 : 1
+    // (i.e. Relatr is half the price-pane height, Rvol is half of Relatr).
+    const panes = chart.panes();
+    if (panes.length >= 1) {
+      try {
+        panes[0].setStretchFactor(4); // price
+      } catch {
+        /* ignore */
+      }
+    }
+    if (panes.length >= 2) {
+      try {
+        panes[1].setStretchFactor(2); // Relatr
+      } catch {
+        /* ignore */
+      }
+    }
+    if (panes.length >= 3) {
+      try {
+        panes[2].setStretchFactor(1); // Rvol
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [indicators]);
 
   // Group fills by ibOrderID — 1 IB order = 1 marker, mirroring the
   // "Execs" column on the daily table. Multiple partial fills on the

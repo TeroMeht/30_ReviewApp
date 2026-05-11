@@ -37,6 +37,7 @@ from services.ib_bars import (
     compute_bar_status,
     get_last_error,
 )
+from services.chart_indicators import build_indicators
 
 
 import logging
@@ -337,8 +338,42 @@ async def get_trade_bars(
         )
         for r in rows
     ]
+
+    # For the 2-min chart, Relatr needs a daily ATR scalar — pull the daily
+    # series from `trade_bars_daily` and hand it to the indicator builder.
+    # Other timeframes don't read indicators, so we skip the round-trip.
+    daily_bars: list[BarRowSchema] | None = None
+    if tf.label == "2min":
+        daily_table = TIMEFRAME_BY_LABEL["daily"].table
+        daily_rows = await db_conn.fetch(
+            f"""
+            SELECT time, open, high, low, close, volume
+            FROM   {daily_table}
+            WHERE  tradeid = $1
+            ORDER BY time ASC
+            """,
+            tradeid,
+        )
+        daily_bars = [
+            BarRowSchema(
+                time=r["time"],
+                open=r["open"], high=r["high"], low=r["low"], close=r["close"],
+                volume=int(r["volume"]),
+            )
+            for r in daily_rows
+        ]
+
+    # Indicators (EMA9, anchored VWAP, Relatr, Rvol, …) are computed on the
+    # bars we just read. Pure functions in `calculations/`, dispatched by
+    # timeframe in `services.chart_indicators` so the same code can be
+    # reused by the backtest layer later.
+    indicators = build_indicators(tf.label, bars, daily_bars=daily_bars)
     return BarsResponse(
-        tradeid=tradeid, symbol=trade.symbol, timeframe=tf.label, bars=bars,
+        tradeid=tradeid,
+        symbol=trade.symbol,
+        timeframe=tf.label,
+        bars=bars,
+        indicators=indicators,
     )
 
 

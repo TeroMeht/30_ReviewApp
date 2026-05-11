@@ -191,11 +191,36 @@ export interface Bar {
   volume: number;
 }
 
+/** One indicator sample, timestamp matches a bar in `bars`.
+ *  `value` is null on warm-up bars and any bar where the indicator
+ *  isn't defined yet (e.g. start of a VWAP session with no volume). */
+export interface IndicatorPoint {
+  /** ISO 8601 timestamp string — same instant as the corresponding bar */
+  time: string;
+  value: number | null;
+}
+
+/** A named indicator overlay returned alongside the OHLCV bars.
+ *  `name` is a stable key ('ema9', 'vwap'); `color` is a hint the
+ *  frontend may use or override.
+ *  `pane`: 0 = on price pane (overlay), 1+ = stacked sub-panes below.
+ *  `series_type`: 'line' (default) or 'histogram' for bar-style display. */
+export interface IndicatorSeries {
+  name: string;
+  label: string;
+  color?: string | null;
+  pane?: number;
+  series_type?: "line" | "histogram";
+  points: IndicatorPoint[];
+}
+
 export interface BarsResponse {
   tradeid: number;
   symbol: string;
   timeframe: Timeframe;
   bars: Bar[];
+  /** Empty for timeframes the backend hasn't wired indicators for. */
+  indicators?: IndicatorSeries[];
 }
 
 export interface NeighborTrades {

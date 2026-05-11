@@ -166,11 +166,49 @@ class BarRow(BaseModel):
     volume: int
 
 
+class IndicatorPoint(BaseModel):
+    """One indicator sample.
+
+    `time` is the timestamp of the underlying bar — frontend matches points
+    to candles by exact timestamp. `value` is None for warm-up bars and
+    any point where the indicator isn't defined yet (e.g. start of a VWAP
+    session before any volume has accumulated)."""
+    time: datetime
+    value: Optional[float] = None
+
+
+class IndicatorSeries(BaseModel):
+    """A named indicator overlay returned with a BarsResponse.
+
+    Generic shape so adding more indicators later (RSI, MACD lines, etc.)
+    doesn't churn the response schema. `name` is the stable key the
+    frontend keys on (e.g. 'ema9', 'vwap'); `label` is the human-readable
+    legend; `color` is a hint the frontend may use, but the frontend is
+    free to ignore it and pick its own palette.
+
+    `pane`: which chart pane to draw on. 0 = price pane (default — overlay
+    on candles). 1+ = stacked sub-panes below. Used for indicators that
+    aren't on the price axis (Relatr, Rvol).
+
+    `series_type`: how to render. 'line' (default) for continuous lines
+    (EMA, VWAP, Relatr). 'histogram' for bar-style indicators (Rvol).
+    """
+    name: str
+    label: str
+    color: Optional[str] = None
+    pane: int = 0
+    series_type: str = "line"
+    points: list[IndicatorPoint]
+
+
 class BarsResponse(BaseModel):
     tradeid: int
     symbol: str
     timeframe: str
     bars: list[BarRow]
+    # Computed overlays (EMA, VWAP, …). Empty for timeframes we haven't
+    # wired indicators for yet.
+    indicators: list[IndicatorSeries] = []
 
 
 class NeighborTrades(BaseModel):

@@ -14,7 +14,10 @@ import TradeChart from "./TradeChart";
 const TIMEFRAMES: { tf: Timeframe; label: string; height: number }[] = [
   { tf: "daily", label: "Daily · 1Y", height: 280 },
   { tf: "30min", label: "30 min · 30D", height: 320 },
-  { tf: "2min",  label: "2 min · 5D",  height: 420 },
+  // 2-min chart hosts three panes: price (~ 420px), Relatr (200px,
+  // expanded so the ±0.5 reference bands have room), Rvol (110px).
+  // Bump total height to keep the price pane usable.
+  { tf: "2min",  label: "2 min · 5D",  height: 730 },
 ];
 
 interface Props {
@@ -140,6 +143,7 @@ export default function ChartStack({ tradeid, executions }: Props) {
                 timeframe={tf}
                 label={label}
                 height={height}
+                indicators={data.indicators}
               />
             )}
           </div>
