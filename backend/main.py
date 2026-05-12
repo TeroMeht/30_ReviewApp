@@ -29,27 +29,21 @@ ib = IB()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: connect IBKR, open DB pool. Shutdown: close both."""
+    """Startup: open DB pool only. IBKR is connected lazily — see
+    routers/trades.py /fetch-bars-batch which calls ensure_ib_connected().
+
+    The IB() object is still created here and stashed on app.state so
+    get_ib() can hand it out, but no socket is opened. This means the
+    backend boots even when TWS / IB Gateway isn't running; only the
+    market-data fetch path needs the live connection.
+
+    Shutdown: close DB pool, and disconnect IB if it was opened during
+    the session.
+    """
     db_pool: asyncpg.Pool | None = None
     try:
-        # IBKR is required: if TWS / IB Gateway isn't running the app fails
-        # to start. Bar fetches assume a live IB connection.
-        logger.info(
-            "Connecting to IBKR | host=%s port=%s clientId=%s",
-            settings.IB_HOST,
-            settings.IB_PORT,
-            settings.IB_CLIENT_ID,
-        )
-        await ib.connectAsync(
-            settings.IB_HOST,
-            settings.IB_PORT,
-            clientId=settings.IB_CLIENT_ID,
-        )
-        logger.info("IBKR connected")
-
         logger.info("Creating DB pool")
         db_pool = await asyncpg.create_pool(dsn=settings.DATABASE_URL)
-
 
         async with db_pool.acquire() as conn:
             await create_trades_table(conn)
@@ -58,6 +52,14 @@ async def lifespan(app: FastAPI):
 
         app.state.ib = ib
         app.state.db_pool = db_pool
+
+        logger.info(
+            "Backend ready. IBKR not connected yet — will connect on first "
+            "market-data fetch (host=%s port=%s clientId=%s).",
+            settings.IB_HOST,
+            settings.IB_PORT,
+            settings.IB_CLIENT_ID,
+        )
 
     except Exception:
         logger.exception("Startup failed")

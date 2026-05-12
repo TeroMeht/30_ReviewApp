@@ -4,6 +4,7 @@ Calculations layer — pure functions for indicators and trade metrics.
 
 from .bars import IndicatorBar
 from .indicators import (
+    sma,
     ema,
     ewm,
     vwap_anchored,
@@ -16,6 +17,7 @@ from .indicators import (
 
 __all__ = [
     "IndicatorBar",
+    "sma",
     "ema",
     "ewm",
     "vwap_anchored",

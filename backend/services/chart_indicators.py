@@ -19,6 +19,7 @@ from typing import Optional, Sequence
 
 from schemas.api_schemas import BarRow as BarRowSchema, IndicatorPoint, IndicatorSeries
 from calculations import (
+    sma,
     ema,
     vwap_anchored,
     atr,
@@ -38,9 +39,15 @@ VWAP_ANCHOR_MINUTE: int = 0
 VWAP_ANCHOR_TZ: str = "Europe/Helsinki"
 ATR_PERIOD: int = 14
 
+# Daily-chart SMA. 200 is the standard long-term trend filter; values
+# only start ~200 bars in (we fetch 1Y ≈ 250 daily bars, so the line
+# appears for roughly the most recent 50 trading days).
+SMA200_PERIOD: int = 200
+
 # Hints the frontend may consult for default styling.
 EMA_COLOR: str = "#2563eb"     # blue
 VWAP_COLOR: str = "#dc2626"    # red
+SMA200_COLOR: str = "#dc2626"  # red (daily chart)
 RELATR_COLOR: str = "#2563eb"  # blue (sub-pane 1)
 RVOL_COLOR: str = "#a855f7"    # purple (sub-pane 2)
 
@@ -53,24 +60,46 @@ def build_indicators(
     """
     Compute the overlay set for a given timeframe.
 
-    Right now only the 2-min chart gets indicators — daily / 30-min charts
-    return an empty list. The 2-min chart receives:
+    Per-timeframe overlays:
 
-      Pane 0 (price)
-        * EMA9        on closes
-        * Anchored VWAP (11:00 Helsinki anchor, resets daily)
-      Pane 1 (sub-pane)
-        * Relatr      = (VWAP − Close) / ATR14   (ATR from daily bars)
-      Pane 2 (sub-pane)
-        * Rvol        = cumVol / cumAvgVol       (anchored to the same
-                                                  11:00 Helsinki session;
-                                                  trade-day bars only)
+      daily
+        * SMA200  on closes (red line, drawn on price pane)
+      30min
+        * (none yet)
+      2min
+        Pane 0 (price)
+          * EMA9        on closes
+          * Anchored VWAP (11:00 Helsinki anchor, resets daily)
+        Pane 1 (sub-pane)
+          * Relatr      = (VWAP − Close) / ATR14   (ATR from daily bars)
+        Pane 2 (sub-pane)
+          * Rvol        = cumVol / cumAvgVol       (anchored to the same
+                                                    11:00 Helsinki session;
+                                                    trade-day bars only)
 
     Add more branches here as we layer in more indicators (and route them
     to other timeframes).
     """
     if not bars:
         return []
+
+    # ─── Daily chart: SMA200 only ─────────────────────────────────────────
+    if timeframe == "daily":
+        ind_bars = to_indicator_bars(bars)
+        sma_vals = sma([b.close for b in ind_bars], SMA200_PERIOD)
+        return [
+            IndicatorSeries(
+                name=f"sma{SMA200_PERIOD}",
+                label=f"SMA {SMA200_PERIOD}",
+                color=SMA200_COLOR,
+                pane=0,
+                series_type="line",
+                points=[
+                    IndicatorPoint(time=b.time, value=v)
+                    for b, v in zip(ind_bars, sma_vals)
+                ],
+            )
+        ]
 
     if timeframe != "2min":
         return []

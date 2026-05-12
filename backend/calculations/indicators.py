@@ -8,6 +8,7 @@ and is also what a backtester wants (so it can ask "what was EMA9 at bar
 i?" without recomputing).
 
 Currently exported:
+  * `sma(values, period)`              — simple (rolling-mean) moving avg
   * `ema(values, period)`              — SMA-seeded exponential moving avg
   * `ewm(values, span)`                — pandas-style recursive EMA
                                          (ewm(span, adjust=False).mean())
@@ -26,6 +27,39 @@ from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from .bars import IndicatorBar
+
+
+# ─── SMA (rolling mean) ───────────────────────────────────────────────────────
+
+def sma(values: Sequence[float | None], period: int) -> list[float | None]:
+    """
+    Simple moving average over a fixed window of `period` samples.
+
+    Aligned 1:1 with `values`. Output is None for indices [0 .. period-2]
+    (warm-up); index `period-1` is the mean of `values[0:period]`, and
+    every subsequent index is the mean of the trailing window.
+
+    None entries in the input reset the window — we never average over
+    holes — so the function is safe on sparse / hole-y series the way
+    `ema()` is.
+    """
+    if period < 1:
+        raise ValueError(f"sma period must be >= 1, got {period}")
+
+    out: list[float | None] = [None] * len(values)
+    window: list[float] = []
+
+    for i, v in enumerate(values):
+        if v is None:
+            window = []
+            continue
+        window.append(v)
+        if len(window) > period:
+            window.pop(0)
+        if len(window) == period:
+            out[i] = sum(window) / period
+
+    return out
 
 
 # ─── EMA (SMA-seeded) ─────────────────────────────────────────────────────────

@@ -1,0 +1,278 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc" font-family="Inter, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <title id="title">30_ReviewApp architecture</title>
+  <desc id="desc">Layered architecture diagram showing how the Next.js frontend talks to the FastAPI backend, which uses pure calculation primitives for chart indicators and persists everything to PostgreSQL. IBKR TWS and the IB Flex Web Service are external data sources.</desc>
+
+  <!-- ─── styles ─────────────────────────────────────────────────── -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-dashed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <style><![CDATA[
+      .layer-label { font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; fill: #64748b; }
+      .layer-bg    { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1; }
+      .box-title   { font-size: 13px; font-weight: 700; fill: #0f172a; }
+      .box-sub     { font-size: 10.5px; fill: #475569; }
+      .box-meta    { font-size: 10px; fill: #64748b; }
+      .tag         { font-size: 9.5px; font-weight: 600; letter-spacing: 0.04em; fill: #ffffff; }
+      .flow-label  { font-size: 10.5px; fill: #334155; font-weight: 500; }
+      .flow-sub    { font-size: 9.5px; fill: #64748b; }
+      .arrow       { stroke: #475569; stroke-width: 1.6; fill: none; }
+      .arrow-d     { stroke: #94a3b8; stroke-width: 1.4; fill: none; stroke-dasharray: 4 3; }
+      .header      { font-size: 22px; font-weight: 700; fill: #0f172a; }
+      .header-sub  { font-size: 12px; fill: #64748b; }
+    ]]></style>
+  </defs>
+
+  <!-- ─── header ─────────────────────────────────────────────────── -->
+  <text x="40" y="44" class="header">30_ReviewApp — Architecture</text>
+  <text x="40" y="64" class="header-sub">Next.js frontend  ·  FastAPI backend  ·  pure calculation core  ·  PostgreSQL + IBKR</text>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 1 — EXTERNAL                                              -->
+  <!-- ============================================================== -->
+  <rect x="32" y="92" width="1216" height="120" rx="10" class="layer-bg"/>
+  <text x="48" y="112" class="layer-label">External</text>
+
+  <!-- Browser -->
+  <g>
+    <rect x="72" y="128" width="220" height="70" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="72" y="128" width="64" height="20" rx="8" fill="#64748b"/>
+    <text x="104" y="142" class="tag" text-anchor="middle">BROWSER</text>
+    <text x="88" y="170" class="box-title">User · Trade Review UI</text>
+    <text x="88" y="187" class="box-sub">localhost:3000</text>
+  </g>
+
+  <!-- IBKR TWS -->
+  <g>
+    <rect x="380" y="128" width="240" height="70" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="380" y="128" width="92" height="20" rx="8" fill="#0ea5e9"/>
+    <text x="426" y="142" class="tag" text-anchor="middle">IB TWS / GATEWAY</text>
+    <text x="396" y="170" class="box-title">ib-async socket</text>
+    <text x="396" y="187" class="box-sub">historical bars · lazy connect</text>
+  </g>
+
+  <!-- IB Flex -->
+  <g>
+    <rect x="660" y="128" width="240" height="70" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="660" y="128" width="100" height="20" rx="8" fill="#0ea5e9"/>
+    <text x="710" y="142" class="tag" text-anchor="middle">IB FLEX WEB SVC</text>
+    <text x="676" y="170" class="box-title">Executions report</text>
+    <text x="676" y="187" class="box-sub">HTTPS · year-to-date fills</text>
+  </g>
+
+  <!-- PostgreSQL -->
+  <g>
+    <rect x="940" y="128" width="260" height="70" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+    <rect x="940" y="128" width="84" height="20" rx="8" fill="#f59e0b"/>
+    <text x="982" y="142" class="tag" text-anchor="middle">POSTGRESQL</text>
+    <text x="956" y="170" class="box-title">asyncpg pool</text>
+    <text x="956" y="187" class="box-sub">trades · executions · trade_bars_*</text>
+  </g>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 2 — FRONTEND                                              -->
+  <!-- ============================================================== -->
+  <rect x="32" y="240" width="1216" height="180" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+  <text x="48" y="260" class="layer-label" fill="#1d4ed8">Frontend — Next.js · React 19 · TypeScript</text>
+  <text x="1220" y="260" class="layer-label" fill="#1d4ed8" text-anchor="end">localhost:3000</text>
+
+  <!-- Pages -->
+  <g>
+    <rect x="60" y="278" width="270" height="124" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+    <rect x="60" y="278" width="60" height="20" rx="8" fill="#2563eb"/>
+    <text x="90" y="292" class="tag" text-anchor="middle">PAGES</text>
+    <text x="76" y="316" class="box-title">app/(root)/</text>
+    <text x="76" y="334" class="box-sub">• trade-review/page.tsx</text>
+    <text x="76" y="350" class="box-sub">• data-management/page.tsx</text>
+    <text x="76" y="366" class="box-sub">• page.tsx  (home)</text>
+    <text x="76" y="390" class="box-meta">Bootstraps state, owns fetch().</text>
+  </g>
+
+  <!-- Trade-review components -->
+  <g>
+    <rect x="350" y="278" width="320" height="124" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+    <rect x="350" y="278" width="120" height="20" rx="8" fill="#2563eb"/>
+    <text x="410" y="292" class="tag" text-anchor="middle">REVIEW COMPONENTS</text>
+    <text x="366" y="316" class="box-title">components/trade-review/</text>
+    <text x="366" y="334" class="box-sub">ChartStack → TradeChart  (lightweight-charts)</text>
+    <text x="366" y="350" class="box-sub">DailyTradesTable · WeeklyTradesTable</text>
+    <text x="366" y="366" class="box-sub">EditPanel · ExecutionsTable · ReviewHeader</text>
+    <text x="366" y="390" class="box-meta">3 candle panes + indicators + markers.</text>
+  </g>
+
+  <!-- Lib + types -->
+  <g>
+    <rect x="690" y="278" width="240" height="124" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+    <rect x="690" y="278" width="60" height="20" rx="8" fill="#2563eb"/>
+    <text x="720" y="292" class="tag" text-anchor="middle">LIB</text>
+    <text x="706" y="316" class="box-title">lib/  ·  generated/</text>
+    <text x="706" y="334" class="box-sub">• types.ts        (hand-written)</text>
+    <text x="706" y="350" class="box-sub">• api_prefix.ts</text>
+    <text x="706" y="366" class="box-sub">• generated/api.ts  (openapi-typescript)</text>
+    <text x="706" y="390" class="box-meta">Shared types mirror backend pydantic.</text>
+  </g>
+
+  <!-- UI primitives -->
+  <g>
+    <rect x="950" y="278" width="270" height="124" rx="8" fill="#ffffff" stroke="#93c5fd" stroke-width="1.2"/>
+    <rect x="950" y="278" width="120" height="20" rx="8" fill="#2563eb"/>
+    <text x="1010" y="292" class="tag" text-anchor="middle">UI · STYLING</text>
+    <text x="966" y="316" class="box-title">components/ui · globals.css</text>
+    <text x="966" y="334" class="box-sub">Tailwind 4 · shadcn primitives</text>
+    <text x="966" y="350" class="box-sub">HeaderBox · Sidebar</text>
+    <text x="966" y="390" class="box-meta">Layout shell + reusable widgets.</text>
+  </g>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 3 — BACKEND                                               -->
+  <!-- ============================================================== -->
+  <rect x="32" y="448" width="1216" height="260" rx="10" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="1"/>
+  <text x="48" y="468" class="layer-label" fill="#047857">Backend — FastAPI · Python 3.13 · asyncpg · ib-async</text>
+  <text x="1220" y="468" class="layer-label" fill="#047857" text-anchor="end">127.0.0.1:8000</text>
+
+  <!-- Routers -->
+  <g>
+    <rect x="60" y="486" width="280" height="120" rx="8" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.2"/>
+    <rect x="60" y="486" width="80" height="20" rx="8" fill="#059669"/>
+    <text x="100" y="500" class="tag" text-anchor="middle">ROUTERS</text>
+    <text x="76" y="524" class="box-title">/api/trades</text>
+    <text x="76" y="542" class="box-sub">GET /{id} · /day · /week · /executions · /bars · /neighbors</text>
+    <text x="76" y="558" class="box-sub">POST /sync · /fetch-bars-batch (lazy IB)</text>
+    <text x="76" y="582" class="box-title">/api/executions</text>
+    <text x="76" y="600" class="box-sub">GET /ib  (Flex pull → DB)</text>
+  </g>
+
+  <!-- Services -->
+  <g>
+    <rect x="360" y="486" width="280" height="120" rx="8" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.2"/>
+    <rect x="360" y="486" width="80" height="20" rx="8" fill="#059669"/>
+    <text x="400" y="500" class="tag" text-anchor="middle">SERVICES</text>
+    <text x="376" y="524" class="box-title">services/</text>
+    <text x="376" y="542" class="box-sub">• ib_bars  (1-ticker lock, 3 timeframes async)</text>
+    <text x="376" y="558" class="box-sub">• ib_flex  (HTTPS executions pull)</text>
+    <text x="376" y="574" class="box-sub">• chart_indicators  (timeframe → series)</text>
+    <text x="376" y="598" class="box-meta">Business logic between routers &amp; DB / IO.</text>
+  </g>
+
+  <!-- DB + schemas -->
+  <g>
+    <rect x="660" y="486" width="280" height="120" rx="8" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.2"/>
+    <rect x="660" y="486" width="120" height="20" rx="8" fill="#059669"/>
+    <text x="720" y="500" class="tag" text-anchor="middle">DB · SCHEMAS</text>
+    <text x="676" y="524" class="box-title">db/  ·  schemas/</text>
+    <text x="676" y="542" class="box-sub">• db/trades · db/executions · db/trade_bars</text>
+    <text x="676" y="558" class="box-sub">• raw asyncpg, one file per table/domain</text>
+    <text x="676" y="574" class="box-sub">• schemas/api_schemas.py  (pydantic)</text>
+    <text x="676" y="598" class="box-meta">SQL stays here; routers never touch it.</text>
+  </g>
+
+  <!-- App glue -->
+  <g>
+    <rect x="960" y="486" width="260" height="120" rx="8" fill="#ffffff" stroke="#6ee7b7" stroke-width="1.2"/>
+    <rect x="960" y="486" width="100" height="20" rx="8" fill="#059669"/>
+    <text x="1010" y="500" class="tag" text-anchor="middle">APP GLUE</text>
+    <text x="976" y="524" class="box-title">main · dependencies · core</text>
+    <text x="976" y="542" class="box-sub">• main.py  (FastAPI + lifespan)</text>
+    <text x="976" y="558" class="box-sub">• dependencies.py  (Depends + ensure_ib_connected)</text>
+    <text x="976" y="574" class="box-sub">• core/config.py  (.env settings)</text>
+    <text x="976" y="598" class="box-meta">IB() created at boot, not connected.</text>
+  </g>
+
+  <!-- Lazy IB callout -->
+  <g>
+    <rect x="60" y="630" width="1160" height="58" rx="8" fill="#fef3c7" stroke="#fde68a" stroke-width="1"/>
+    <text x="80" y="652" class="box-title" fill="#92400e">⚡ Lazy IB connection</text>
+    <text x="80" y="672" class="box-sub" fill="#78350f">Backend boots even when TWS is offline. The first time someone hits <tspan font-weight="700">POST /api/trades/fetch-bars-batch</tspan> (the "Update Market Data" button), <tspan font-weight="700">ensure_ib_connected()</tspan> opens the socket; subsequent calls reuse it.</text>
+  </g>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 4 — CALCULATIONS (pure)                                   -->
+  <!-- ============================================================== -->
+  <rect x="32" y="724" width="1216" height="150" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1"/>
+  <text x="48" y="744" class="layer-label" fill="#6b21a8">Calculation Core — pure Python, no IO, reusable by backtest engine</text>
+
+  <!-- Bars / IndicatorBar -->
+  <g>
+    <rect x="60" y="762" width="220" height="96" rx="8" fill="#ffffff" stroke="#d8b4fe" stroke-width="1.2"/>
+    <rect x="60" y="762" width="60" height="20" rx="8" fill="#9333ea"/>
+    <text x="90" y="776" class="tag" text-anchor="middle">BARS</text>
+    <text x="76" y="800" class="box-title">calculations/bars.py</text>
+    <text x="76" y="818" class="box-sub">IndicatorBar dataclass</text>
+    <text x="76" y="834" class="box-sub">to_indicator_bars(BarRow[])</text>
+    <text x="76" y="852" class="box-meta">Decimal → float adapter.</text>
+  </g>
+
+  <!-- Indicators -->
+  <g>
+    <rect x="300" y="762" width="380" height="96" rx="8" fill="#ffffff" stroke="#d8b4fe" stroke-width="1.2"/>
+    <rect x="300" y="762" width="120" height="20" rx="8" fill="#9333ea"/>
+    <text x="360" y="776" class="tag" text-anchor="middle">INDICATORS</text>
+    <text x="316" y="800" class="box-title">calculations/indicators.py</text>
+    <text x="316" y="818" class="box-sub">sma · ema · ewm · vwap_anchored</text>
+    <text x="316" y="834" class="box-sub">true_ranges · atr · relatr · rvol · avg_volume_per_time_of_day</text>
+    <text x="316" y="852" class="box-meta">Aligned 1:1 with input. None = warm-up.</text>
+  </g>
+
+  <!-- Bridge -->
+  <g>
+    <rect x="700" y="762" width="520" height="96" rx="8" fill="#ffffff" stroke="#d8b4fe" stroke-width="1.2"/>
+    <rect x="700" y="762" width="80" height="20" rx="8" fill="#9333ea"/>
+    <text x="740" y="776" class="tag" text-anchor="middle">BRIDGE</text>
+    <text x="716" y="800" class="box-title">services/chart_indicators.py · build_indicators(timeframe, bars)</text>
+    <text x="716" y="820" class="box-sub">daily  → SMA200 (red)            ·  30 min → (none yet)</text>
+    <text x="716" y="836" class="box-sub">2 min  → EMA9 + anchored VWAP  |  Relatr (pane 1)  |  Rvol (pane 2)</text>
+    <text x="716" y="852" class="box-meta">The only place that knows about chart-side wiring.</text>
+  </g>
+
+  <!-- ============================================================== -->
+  <!-- ARROWS                                                          -->
+  <!-- ============================================================== -->
+
+  <!-- Browser ↔ Frontend -->
+  <line x1="182" y1="198" x2="182" y2="278" class="arrow" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text x="190" y="240" class="flow-label">HTTP</text>
+
+  <!-- Frontend → Backend (Pages-to-Routers) -->
+  <line x1="195" y1="402" x2="195" y2="486" class="arrow" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text x="203" y="432" class="flow-label">fetch()  →  /api/...</text>
+  <text x="203" y="446" class="flow-sub">JSON · pydantic schemas</text>
+
+  <!-- Routers → Services -->
+  <line x1="340" y1="546" x2="360" y2="546" class="arrow" marker-end="url(#arrow)"/>
+
+  <!-- Services → DB -->
+  <line x1="640" y1="546" x2="660" y2="546" class="arrow" marker-end="url(#arrow)"/>
+
+  <!-- DB ↔ PostgreSQL -->
+  <line x1="800" y1="486" x2="800" y2="212" class="arrow-d" marker-end="url(#arrow-dashed)" marker-start="url(#arrow-dashed)"/>
+  <text x="808" y="240" class="flow-label">asyncpg pool</text>
+  <text x="808" y="254" class="flow-sub">SQL · TIMESTAMPTZ</text>
+
+  <!-- Services ↔ IB TWS (lazy) -->
+  <line x1="500" y1="486" x2="500" y2="212" class="arrow-d" marker-end="url(#arrow-dashed)" marker-start="url(#arrow-dashed)"/>
+  <text x="508" y="240" class="flow-label">ib-async  (lazy)</text>
+  <text x="508" y="254" class="flow-sub">historical bars · 1 ticker at a time</text>
+
+  <!-- Services ↔ IB Flex -->
+  <line x1="600" y1="486" x2="780" y2="212" class="arrow-d" marker-end="url(#arrow-dashed)" marker-start="url(#arrow-dashed)"/>
+  <text x="668" y="356" class="flow-label">Flex HTTPS</text>
+
+  <!-- Services → Calculations (bridge import) -->
+  <line x1="500" y1="606" x2="500" y2="762" class="arrow" marker-end="url(#arrow)"/>
+  <text x="508" y="652" class="flow-label">build_indicators()</text>
+  <text x="508" y="666" class="flow-sub">pure call · no DB / IO</text>
+
+  <!-- Bridge → Indicators (inside calc core) -->
+  <line x1="700" y1="810" x2="680" y2="810" class="arrow" marker-end="url(#arrow)"/>
+
+  <!-- Indicators → Bars -->
+  <line x1="300" y1="810" x2="280" y2="810" class="arrow" marker-end="url(#arrow)"/>
+
+  <!-- ─── footer legend ─────────────────────────────────────────── -->
+  <g transform="translate(40, 880)">
+    <text class="flow-sub" y="0">Solid arrow = direct call · Dashed = network / IO  ·  Frontend reads BarsResponse with indicators[] and renders each as a TradingView LineSeries / HistogramSeries.</text>
+  </g>
+</svg>

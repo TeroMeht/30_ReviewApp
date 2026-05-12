@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from ib_async import IB
 import asyncpg
 
-from dependencies import get_db_conn, get_db_pool, get_ib
+from dependencies import get_db_conn, get_db_pool, get_ib, ensure_ib_connected
 from schemas.api_schemas import (
     Trade,
     TradeCreate,
@@ -126,12 +126,14 @@ async def fetch_bars_batch(
     timeframes fire concurrently.
 
     UI polls GET /api/trades/bars-status?tradeids=... to track progress.
+
+    Connection is opened lazily here: if IBKR isn't connected yet (the
+    common case at first click after startup), we attempt to connect to
+    TWS / IB Gateway and only fail with 503 if that doesn't succeed.
     """
-    if not ib.isConnected():
-        raise HTTPException(
-            status_code=503,
-            detail="IBKR client is not connected; cannot fetch bars.",
-        )
+    # ensure_ib_connected() either returns the live client or raises a
+    # 503 with a user-readable detail — no need for a separate check.
+    await ensure_ib_connected(ib)
 
     try:
         tradeids = await find_incomplete_tradeids(db_conn)
