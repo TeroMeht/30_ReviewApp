@@ -41,6 +41,11 @@ export interface Trade {
   /** Distinct iborderids linked to this trade. Populated by the
    *  /trades/{id}/day endpoint; null on every other read. */
   execution_count?: number | null;
+  /** Net realised P/L (cash in − cash out + commission). Decimal
+   *  serialised as a string by FastAPI/pydantic. Populated by the
+   *  /trades/{id}/day endpoint; null on every other read and on
+   *  trades with no executions linked yet. */
+  realized_pnl?: string | null;
 }
 
 /** Body for POST /api/trades */

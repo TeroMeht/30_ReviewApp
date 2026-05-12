@@ -38,6 +38,13 @@ class Trade(BaseModel):
     /trades/{id}/day endpoint populates it with COUNT(DISTINCT iborderid)
     so the daily table can show how many distinct orders made up each
     trade (multiple fills sharing the same iborderid count as one).
+
+    `realized_pnl` is also opt-in and populated by /trades/{id}/day. It is
+    the net realised P/L computed from this trade's linked executions:
+    SUM(sell cash – buy cash) + SUM(ibCommission). IB commission is stored
+    as a negative number (it's a cost), so simple addition gives net P/L.
+    Returned as a string so the API stays Decimal-safe; the frontend
+    parses it. Will be None if the trade has no executions yet.
     """
     tradeid: int
     symbol: str
@@ -48,6 +55,7 @@ class Trade(BaseModel):
     category: Optional[str] = None
     notes: Optional[str] = None
     execution_count: Optional[int] = None
+    realized_pnl: Optional[Decimal] = None
 
 
 class TradeCreate(BaseModel):

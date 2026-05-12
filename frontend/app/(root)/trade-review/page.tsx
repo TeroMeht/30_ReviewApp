@@ -180,7 +180,8 @@ export default function TradeReviewPage() {
       </div>
 
       <div style={panel}>
-        <div style={panelHdr}>This week’s trades</div>
+        {/* WeeklyTradesTable renders its own clickable header (collapsed
+            by default), so we don't add a panelHdr here. */}
         <WeeklyTradesTable
           currentTradeId={trade.tradeid}
           weekKey={trade.tradeid}

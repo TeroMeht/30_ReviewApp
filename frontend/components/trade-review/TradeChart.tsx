@@ -331,7 +331,7 @@ export default function TradeChart({
             price: 0,
             color: "#000000",
             lineWidth: 1,
-            lineStyle: LineStyle.Solid,
+            lineStyle: LineStyle.Dashed,
             axisLabelVisible: true,
             title: "0",
           });
@@ -350,6 +350,18 @@ export default function TradeChart({
             lineStyle: LineStyle.Solid,
             axisLabelVisible: true,
             title: "-0.5",
+          });
+        }
+
+        // Rvol "above-average" threshold: 2× cumulative-vs-baseline.
+        if (ind.name === "rvol") {
+          series.createPriceLine({
+            price: 2,
+            color: "#000000",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: "2",
           });
         }
       } else {

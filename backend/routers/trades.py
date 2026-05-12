@@ -467,6 +467,25 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    # `realized_pnl` is computed inline so the daily table can show
+    # per-trade P/L and the page can sum them for a day total without a
+    # second roundtrip.
+    #
+    # `quantity` in executions is SIGNED — positive on BUY, negative on
+    # SELL (carried straight from IB Flex). So per-row cash flow is
+    # simply `-quantity * price`:
+    #   * BUY  +70 @ 56.07  →  cash out  -70*56.07  = -3924.9
+    #   * SELL -32 @ 55.52  →  cash in  -(-32)*55.52 = +1776.7
+    #
+    # `ibcommission` is stored negative (it's a cost), so summing it in
+    # produces a net figure.
+    #
+    # NULL when no executions are linked yet — distinguishes "no fills"
+    # from "fills that net to zero".
+    #
+    # Caveat: this is the *raw cash flow*, which equals realized P/L
+    # only when the trade is flat (Σ quantity = 0). For partially-closed
+    # positions the number includes the cost basis of the open shares.
     rows = await db_conn.fetch(
         f"""
         WITH ref AS (
@@ -475,7 +494,11 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
         )
         SELECT  t.tradeid, t.symbol, t.date, t.setup, t.price_action_rating,
                 t.price_position, t.category, t.notes,
-                COUNT(DISTINCT e.iborderid)::int AS execution_count
+                COUNT(DISTINCT e.iborderid)::int AS execution_count,
+                CASE WHEN COUNT(e.tradeid) = 0 THEN NULL
+                     ELSE COALESCE(SUM(-e.quantity * e.tradeprice), 0)
+                          + COALESCE(SUM(e.ibcommission), 0)
+                END AS realized_pnl
         FROM    trades t
         LEFT JOIN executions e ON e.trade_fk = t.tradeid
         WHERE   (t.date AT TIME ZONE '{LOCAL_TZ}')::date = (SELECT local_day FROM ref)

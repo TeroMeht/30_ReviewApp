@@ -14,16 +14,19 @@ import { API_PREFIX } from "@/lib/api_prefix";
 import type { Trade, TradeUpdate } from "@/lib/types";
 
 const SETUP_OPTIONS = [
+  "No setup",
   "VWAP continuation",
   "Reversal short",
   "Reversal long",
   "Parabolic short",
   "Extreme reversal",
   "Opening range breakout",
+  "Swing exit",
 ] as const;
 
-// TODO(user): replace with real taxonomy when defined.
-const CATEGORY_OPTIONS = ["A+", "B"] as const;
+// Quality categories — worst → best so the dropdown reads in the same
+// order the user thinks about them.
+const CATEGORY_OPTIONS = ["B-", "B", "A-", "A", "A+"] as const;
 
 interface Props {
   trade: Trade;
