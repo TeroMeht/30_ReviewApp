@@ -168,6 +168,8 @@ export default function AnalyticsPage() {
             background: "#fff",
             padding: 16,
             overflowX: "auto",
+            overflowY: "visible",
+            minHeight: "600px",
           }}
         >
           {error && (
