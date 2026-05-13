@@ -34,12 +34,24 @@ class CategoryUpdate(BaseModel):
 class Trade(BaseModel):
     """A trade row as stored / returned from the DB.
 
-    `execution_count` is opt-in: most endpoints leave it as None. The
+    Three setup fields are tracked:
+      * ``setup``           – the *planned* / target setup for the day.
+      * ``intended_setup``  – what was *actually* executed.
+      * ``observed_setup``  – list of *other* setups that also formed
+                              on the ticker that day, regardless of
+                              plan/execution. Empty list / None means
+                              nothing else observed. Backtesting label.
+    A deviation is ``setup != intended_setup``. ``setup`` and
+    ``intended_setup`` are free-form text (taxonomy enforced in the
+    UI) and either can be None. ``observed_setup`` is a Postgres
+    TEXT[] mapped to a Python list.
+
+    ``execution_count`` is opt-in: most endpoints leave it as None. The
     /trades/{id}/day endpoint populates it with COUNT(DISTINCT iborderid)
     so the daily table can show how many distinct orders made up each
     trade (multiple fills sharing the same iborderid count as one).
 
-    `realized_pnl` is also opt-in and populated by /trades/{id}/day. It is
+    ``realized_pnl`` is also opt-in and populated by /trades/{id}/day. It is
     the net realised P/L computed from this trade's linked executions:
     SUM(sell cash – buy cash) + SUM(ibCommission). IB commission is stored
     as a negative number (it's a cost), so simple addition gives net P/L.
@@ -50,6 +62,8 @@ class Trade(BaseModel):
     symbol: str
     date: datetime
     setup: Optional[str] = None
+    intended_setup: Optional[str] = None
+    observed_setup: Optional[list[str]] = None
     price_action_rating: Optional[int] = None
     price_position: Optional[int] = None
     category: Optional[str] = None
@@ -63,6 +77,8 @@ class TradeCreate(BaseModel):
     symbol: str
     date: datetime
     setup: Optional[str] = None
+    intended_setup: Optional[str] = None
+    observed_setup: Optional[list[str]] = None
     price_action_rating: Optional[int] = Field(default=None, ge=1, le=5)
     price_position: Optional[int] = None
     category: Optional[str] = None
@@ -74,6 +90,8 @@ class TradeUpdate(BaseModel):
     symbol: Optional[str] = None
     date: Optional[datetime] = None
     setup: Optional[str] = None
+    intended_setup: Optional[str] = None
+    observed_setup: Optional[list[str]] = None
     price_action_rating: Optional[int] = Field(default=None, ge=1, le=5)
     price_position: Optional[int] = None
     category: Optional[str] = None

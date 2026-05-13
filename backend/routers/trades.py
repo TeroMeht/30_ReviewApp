@@ -235,8 +235,8 @@ async def get_latest_trade(db_conn=Depends(get_db_conn)):
     """Return the trade with the largest `date`. Default landing row for the review page."""
     row = await db_conn.fetchrow(
         """
-        SELECT tradeid, symbol, date, setup, price_action_rating,
-               price_position, category, notes
+        SELECT tradeid, symbol, date, setup, intended_setup, observed_setup,
+               price_action_rating, price_position, category, notes
         FROM trades
         ORDER BY date DESC, tradeid DESC
         LIMIT 1
@@ -443,8 +443,9 @@ async def get_trades_in_week(tradeid: int, db_conn=Depends(get_db_conn)):
           ) AS week_start
           FROM trades WHERE tradeid = $1
         )
-        SELECT t.tradeid, t.symbol, t.date, t.setup, t.price_action_rating,
-               t.price_position, t.category, t.notes
+        SELECT t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
+               t.observed_setup, t.price_action_rating, t.price_position,
+               t.category, t.notes
         FROM   trades t, ref
         WHERE  date_trunc(
                  'week',
@@ -494,8 +495,9 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
           SELECT (date AT TIME ZONE '{LOCAL_TZ}')::date AS local_day
           FROM   trades WHERE tradeid = $1
         )
-        SELECT  t.tradeid, t.symbol, t.date, t.setup, t.price_action_rating,
-                t.price_position, t.category, t.notes,
+        SELECT  t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
+                t.observed_setup, t.price_action_rating, t.price_position,
+                t.category, t.notes,
                 COUNT(DISTINCT e.iborderid)::int AS execution_count,
                 CASE WHEN COUNT(e.tradeid) = 0 THEN NULL
                      ELSE COALESCE(SUM(-e.quantity * e.tradeprice), 0)

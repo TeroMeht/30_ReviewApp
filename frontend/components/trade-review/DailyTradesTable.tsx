@@ -157,7 +157,9 @@ export default function DailyTradesTable({
               <th style={th}>#</th>
               <th style={th}>Date</th>
               <th style={th}>Symbol</th>
-              <th style={th}>Setup</th>
+              <th style={th}>Setup (planned)</th>
+              <th style={th}>Intended (actual)</th>
+              <th style={th}>Observed</th>
               <th style={th}>Category</th>
               <th style={{ ...th, textAlign: "center" }}>PA</th>
               <th style={{ ...th, textAlign: "center" }}>PP</th>
@@ -170,6 +172,13 @@ export default function DailyTradesTable({
             {trades.map((t) => {
               const isCurrent = t.tradeid === currentTradeId;
               const pnl = parsePnl(t.realized_pnl);
+              // Highlight deviations (planned ≠ actual). Only flag when
+              // both columns are filled in to avoid lighting up rows
+              // that are simply unlabelled.
+              const deviation =
+                t.setup != null &&
+                t.intended_setup != null &&
+                t.setup !== t.intended_setup;
               return (
                 <tr
                   key={t.tradeid}
@@ -193,6 +202,37 @@ export default function DailyTradesTable({
                     {t.symbol}
                   </td>
                   <td style={td}>{t.setup ?? "—"}</td>
+                  <td
+                    style={{
+                      ...td,
+                      ...(deviation
+                        ? { color: "#b45309", fontWeight: 600 }
+                        : null),
+                    }}
+                    title={
+                      deviation
+                        ? `Deviation: planned "${t.setup}" → executed "${t.intended_setup}"`
+                        : undefined
+                    }
+                  >
+                    {deviation ? "⚠ " : ""}
+                    {t.intended_setup ?? "—"}
+                  </td>
+                  <td
+                    style={{
+                      ...td,
+                      color: "#475569",
+                      maxWidth: 240,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={(t.observed_setup ?? []).join(", ")}
+                  >
+                    {t.observed_setup && t.observed_setup.length > 0
+                      ? t.observed_setup.join(", ")
+                      : "—"}
+                  </td>
                   <td style={td}>{t.category ?? "—"}</td>
                   <td style={{ ...td, textAlign: "center" }}>
                     {t.price_action_rating ?? "—"}
@@ -248,7 +288,7 @@ export default function DailyTradesTable({
               >
                 <td
                   style={{ ...td, fontWeight: 700, color: "#475569" }}
-                  colSpan={7}
+                  colSpan={9}
                 >
                   Day total ({totalTrades} trade{totalTrades === 1 ? "" : "s"}
                   {tradesWithPnl !== totalTrades

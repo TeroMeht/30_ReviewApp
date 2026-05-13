@@ -40,7 +40,25 @@ LOCAL_TZ = "Europe/Helsinki"
 # ─── Schema setup ─────────────────────────────────────────────────────────────
 
 async def create_trades_table(db_conn: asyncpg.Connection) -> None:
-    """Create the trades table and its (symbol, local-day) unique index. Idempotent."""
+    """Create the trades table and its (symbol, local-day) unique index.
+    Idempotent. Also applies forward-compatible ALTER TABLE migrations
+    for columns added after the initial schema (e.g. ``intended_setup``)
+    so existing deployments pick up new columns on next boot.
+
+    Schema semantics:
+        setup           — planned / target setup (what we were trying
+                          to take). NULL = unknown.
+        intended_setup  — actually executed setup (what we ended up
+                          doing). NULL = unknown / not labelled.
+        observed_setup  — TEXT[] of *other* setups that also formed on
+                          the ticker that day, regardless of whether
+                          we planned or executed them. Empty / NULL =
+                          nothing else observed. Backtesting-friendly:
+                          lets us answer "when these conditions co-
+                          occurred, what was the outcome?".
+    A trade where setup ≠ intended_setup is a deviation — useful for
+    evaluating the cost of mis-executions.
+    """
     exists = await db_conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.tables
@@ -50,6 +68,13 @@ async def create_trades_table(db_conn: asyncpg.Connection) -> None:
 
     if exists:
         logger.info("Trades table already exists, skipping creation")
+        # Forward-compat migration: pick up new columns on existing DBs.
+        await db_conn.execute(
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS intended_setup TEXT"
+        )
+        await db_conn.execute(
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS observed_setup TEXT[]"
+        )
         return
 
     await db_conn.execute(f"""
@@ -58,6 +83,8 @@ async def create_trades_table(db_conn: asyncpg.Connection) -> None:
             symbol               TEXT NOT NULL,
             date                 TIMESTAMPTZ NOT NULL,
             setup                TEXT,
+            intended_setup       TEXT,
+            observed_setup       TEXT[],
             price_action_rating  INTEGER CHECK (price_action_rating BETWEEN 1 AND 5),
             price_position       INTEGER,
             category             TEXT,
@@ -80,13 +107,15 @@ async def insert_trade(db_conn: asyncpg.Connection, payload: TradeCreate) -> Tra
     """Insert a new trade. Raises asyncpg.UniqueViolationError if (symbol, day) already exists."""
     row = await db_conn.fetchrow(
         """
-        INSERT INTO trades (symbol, date, setup, price_action_rating, price_position, category, notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING tradeid, symbol, date, setup, price_action_rating, price_position, category, notes
+        INSERT INTO trades (symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
         """,
         payload.symbol,
         payload.date,
         payload.setup,
+        payload.intended_setup,
+        payload.observed_setup,
         payload.price_action_rating,
         payload.price_position,
         payload.category,
@@ -104,7 +133,7 @@ async def fetch_trades(
     if year is not None and month is not None:
         rows = await db_conn.fetch(
             f"""
-            SELECT tradeid, symbol, date, setup, price_action_rating, price_position, category, notes
+            SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
             FROM trades
             WHERE EXTRACT(YEAR  FROM (date AT TIME ZONE '{LOCAL_TZ}')) = $1
               AND EXTRACT(MONTH FROM (date AT TIME ZONE '{LOCAL_TZ}')) = $2
@@ -115,7 +144,7 @@ async def fetch_trades(
     else:
         rows = await db_conn.fetch(
             """
-            SELECT tradeid, symbol, date, setup, price_action_rating, price_position, category, notes
+            SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
             FROM trades
             ORDER BY date ASC
             """
@@ -134,7 +163,7 @@ async def fetch_trades_in_range(
     """
     rows = await db_conn.fetch(
         f"""
-        SELECT tradeid, symbol, date, setup, price_action_rating, price_position, category, notes
+        SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
         FROM trades
         WHERE (date AT TIME ZONE '{LOCAL_TZ}')::date BETWEEN $1::date AND $2::date
         ORDER BY date ASC
@@ -148,7 +177,7 @@ async def fetch_trades_in_range(
 async def fetch_trade_by_id(db_conn: asyncpg.Connection, tradeid: int) -> Trade:
     row = await db_conn.fetchrow(
         """
-        SELECT tradeid, symbol, date, setup, price_action_rating, price_position, category, notes
+        SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
         FROM trades
         WHERE tradeid = $1
         """,
@@ -181,7 +210,7 @@ async def update_trade(
         UPDATE trades
         SET {", ".join(set_clauses)}
         WHERE tradeid = ${len(args)}
-        RETURNING tradeid, symbol, date, setup, price_action_rating, price_position, category, notes
+        RETURNING tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
     """
     row = await db_conn.fetchrow(sql, *args)
     if row is None:
@@ -273,8 +302,8 @@ async def insert_manual_trades(
                 INSERT INTO trades (symbol, date)
                 VALUES ($1, $2)
                 ON CONFLICT (symbol, ((date AT TIME ZONE $3)::date)) DO NOTHING
-                RETURNING tradeid, symbol, date, setup, price_action_rating,
-                          price_position, category, notes
+                RETURNING tradeid, symbol, date, setup, intended_setup, observed_setup,
+                          price_action_rating, price_position, category, notes
                 """,
                 sym, dt, LOCAL_TZ,
             )
@@ -327,8 +356,8 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
             GROUP BY symbol, (datetime AT TIME ZONE '{LOCAL_TZ}')::date
             ON CONFLICT (symbol, ((date AT TIME ZONE '{LOCAL_TZ}')::date)) DO NOTHING
             RETURNING
-                tradeid, symbol, date, setup, price_action_rating,
-                price_position, category, notes
+                tradeid, symbol, date, setup, intended_setup, observed_setup,
+                price_action_rating, price_position, category, notes
             """
         )
         trades_created_rows = [Trade(**dict(r)) for r in created_rows]

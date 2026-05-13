@@ -33,7 +33,16 @@ export interface Trade {
   symbol: string;
   /** ISO 8601 timestamp string */
   date: string;
+  /** Planned / target setup for the day (what we were trying to take). */
   setup: string | null;
+  /** Actually-executed setup (what we ended up doing). When this differs
+   *  from `setup` the trade is a deviation. */
+  intended_setup: string | null;
+  /** Other setups that also formed on the ticker that day, regardless of
+   *  plan/execution. Backtesting label — lets us ask "when these
+   *  setups co-occurred, what was the outcome?". Empty array / null
+   *  means nothing else observed. */
+  observed_setup: string[] | null;
   price_action_rating: number | null;
   price_position: number | null;
   category: string | null;
@@ -54,6 +63,8 @@ export interface TradeCreate {
   /** ISO 8601 timestamp string */
   date: string;
   setup?: string | null;
+  intended_setup?: string | null;
+  observed_setup?: string[] | null;
   price_action_rating?: number | null;
   price_position?: number | null;
   category?: string | null;
@@ -65,6 +76,8 @@ export interface TradeUpdate {
   symbol?: string;
   date?: string;
   setup?: string | null;
+  intended_setup?: string | null;
+  observed_setup?: string[] | null;
   price_action_rating?: number | null;
   price_position?: number | null;
   category?: string | null;
