@@ -246,3 +246,60 @@ export interface NeighborTrades {
   prev_id: number | null;
   next_id: number | null;
 }
+
+// ─── Analytics (weekly P/L per setup) ────────────────────────────────────────
+
+/** One week of per-setup P/L. `by_setup` is keyed by setup label;
+ *  values are Decimal-as-string. Missing keys = no trades for that
+ *  setup that week (treat as 0). */
+export interface WeeklyPnlBucket {
+  /** YYYY-MM-DD — Monday in Europe/Helsinki. */
+  week_start: string;
+  by_setup: Record<string, string>;
+}
+
+/** Response for GET /api/analytics/weekly-pnl. `weeks` is contiguous
+ *  (every Mon..Sun bucket is present, even empty ones) so the chart
+ *  has a stable x-axis. `setups` is the alphabetically-sorted union
+ *  of every setup that appeared in the window — use it for stable
+ *  legend ordering and color assignment. */
+export interface WeeklyPnlResponse {
+  /** Which trade column P/L was attributed to. */
+  group_by: "intended_setup" | "setup";
+  weeks: WeeklyPnlBucket[];
+  setups: string[];
+}
+
+/** One row of /api/analytics/setup-stats — aggregated win/loss + hold-
+ *  time stats for a single setup over the requested window. Decimal
+ *  fields arrive as strings; nullable fields are null when the bucket
+ *  they describe is empty (e.g. `avg_win` is null if a setup never
+ *  won in the window). Hold times are integer seconds. */
+export interface SetupStatsRow {
+  setup: string;
+  trade_count: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  /** 0.0–1.0. wins / trade_count (scratches count in denominator). */
+  win_rate: number;
+  /** Positive Decimal as string, or null if no wins. */
+  avg_win: string | null;
+  /** Negative Decimal as string, or null if no losses. */
+  avg_loss: string | null;
+  /** Integer seconds, or null if no wins. */
+  avg_win_hold_sec: number | null;
+  /** Integer seconds, or null if no losses. */
+  avg_loss_hold_sec: number | null;
+  /** Net P/L per trade across the bucket (incl. scratches). Decimal
+   *  as string; positive is good, negative is bad. */
+  expectancy: string;
+}
+
+/** Response for GET /api/analytics/setup-stats. Rows are sorted by
+ *  setup alphabetically. */
+export interface SetupStatsResponse {
+  group_by: "intended_setup" | "setup";
+  weeks: number;
+  rows: SetupStatsRow[];
+}

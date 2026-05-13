@@ -242,3 +242,83 @@ class NeighborTrades(BaseModel):
     current: int
     prev_id: Optional[int] = None  # newer than current (one step back in time order)
     next_id: Optional[int] = None  # older than current
+
+
+# ─── Analytics ────────────────────────────────────────────────────────────────
+
+class WeeklyPnlBucket(BaseModel):
+    """One week's per-setup P/L breakdown.
+
+    ``week_start`` is the Monday (Europe/Helsinki) anchoring the bucket.
+    ``by_setup`` maps each setup label to its summed realized P/L for
+    that week, serialized as a Decimal string to keep the API
+    Decimal-safe. Setups with zero P/L in the week may be omitted; the
+    frontend treats missing keys as 0. NULL-setup trades are excluded
+    upstream.
+    """
+    week_start: date
+    by_setup: dict[str, Decimal] = Field(default_factory=dict)
+
+
+class WeeklyPnlResponse(BaseModel):
+    """Response for GET /api/analytics/weekly-pnl.
+
+    ``weeks`` is contiguous — every Mon..Sun bucket in the requested
+    window is present, even if no trades fell in it, so the frontend
+    can render a stable x-axis. ``setups`` is the alphabetically-sorted
+    list of every distinct setup that appeared anywhere in the window,
+    giving the frontend a stable color/legend ordering.
+
+    ``group_by`` echoes back the field the server attributed P/L to
+    (``intended_setup`` or ``setup``) so the page can label the chart.
+    """
+    group_by: str
+    weeks: list[WeeklyPnlBucket]
+    setups: list[str]
+
+
+class SetupStatsRow(BaseModel):
+    """Aggregated stats for one setup over the requested window.
+
+    Trades with no executions linked are excluded (no P/L computable).
+    Trades with P/L exactly 0 are counted in ``trade_count`` as
+    "scratches" — they don't contribute to ``avg_win`` or ``avg_loss``
+    but they are still part of the denominator for ``win_rate`` and
+    ``expectancy``, matching how a trader would think about it: a
+    scratch is a trade that happened, just not a winner.
+
+    ``avg_loss`` is a *negative* number (loss in dollars). ``avg_win``
+    is positive. Both are NULL when the bucket they describe is empty
+    (e.g. ``avg_win`` is NULL if the setup never won in the window).
+
+    ``avg_win_hold_sec`` / ``avg_loss_hold_sec`` are average hold
+    times in seconds, computed as MAX(execution.datetime) -
+    MIN(execution.datetime) per trade then averaged. Single-fill
+    trades contribute 0 seconds.
+
+    ``expectancy`` is net P/L per trade across the whole bucket
+    (including scratches): ``(wins * avg_win + losses * avg_loss) /
+    trade_count``. The number you'd expect to make on the next trade
+    of this setup if the past N weeks are representative.
+    """
+    setup: str
+    trade_count: int
+    wins: int
+    losses: int
+    scratches: int
+    win_rate: float  # 0.0–1.0
+    avg_win: Optional[Decimal] = None
+    avg_loss: Optional[Decimal] = None
+    avg_win_hold_sec: Optional[int] = None
+    avg_loss_hold_sec: Optional[int] = None
+    expectancy: Decimal
+
+
+class SetupStatsResponse(BaseModel):
+    """Response for GET /api/analytics/setup-stats. Rows are sorted
+    by setup label alphabetically. ``group_by`` echoes which trade
+    column the rows are bucketed against. ``weeks`` echoes the
+    window size used."""
+    group_by: str
+    weeks: int
+    rows: list[SetupStatsRow]

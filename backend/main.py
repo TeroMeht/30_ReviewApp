@@ -15,7 +15,7 @@ from ib_async import IB
 from core.config import settings
 
 # Routers — add new ones here as the app grows.
-from routers import executions, trades
+from routers import analytics, executions, trades
 
 # Schema setup helpers
 from db.executions import create_executions_table
@@ -97,6 +97,7 @@ app.add_middleware(
 
 app.include_router(executions.router)
 app.include_router(trades.router)
+app.include_router(analytics.router)
 
 
 if __name__ == "__main__":
