@@ -36,7 +36,9 @@ function parseDec(v: string | null): number | null {
 function fmtMoney(n: number | null): string {
   if (n === null) return "—";
   const sign = n < 0 ? "−" : n > 0 ? "+" : "";
-  const abs = Math.abs(n).toLocaleString(undefined, {
+  // Pin the locale so SSR and the browser produce the same string —
+  // `undefined` uses the runtime default and breaks hydration.
+  const abs = Math.abs(n).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });

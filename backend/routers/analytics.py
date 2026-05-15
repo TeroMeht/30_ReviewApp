@@ -36,6 +36,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_db_conn
 from db.trades import LOCAL_TZ
 from schemas.api_schemas import (
+    PlanVsActualResponse,
+    PlanVsActualRow,
     SetupStatsResponse,
     SetupStatsRow,
     WeeklyPnlBucket,
@@ -281,3 +283,94 @@ async def get_setup_stats(
     )
 
     return SetupStatsResponse(group_by=group_by, weeks=weeks, rows=out)
+
+
+@router.get("/plan-vs-actual", response_model=PlanVsActualResponse)
+async def get_plan_vs_actual(
+    weeks: int = Query(
+        12, ge=1, le=104,
+        description="Number of Mon..Sun weeks to include, ending on the current Helsinki week.",
+    ),
+    db_conn=Depends(get_db_conn),
+) -> PlanVsActualResponse:
+    """P/L bucketed by (planned setup → actual setup) over the window.
+
+    Answers the question 'how much is each plan-vs-actual deviation
+    costing me?'. A row where planned == actual is a matched trade
+    (you did what you intended); any other row is a deviation.
+
+    Includes only trades where BOTH ``setup`` (planned) and
+    ``intended_setup`` (actual) are populated — the mapping is
+    meaningless for trades you didn't label both ways. Trades with no
+    executions are also excluded (no P/L to attribute).
+
+    Rows are returned sorted by ``total_pnl`` ASC so the costliest
+    deviations are at the top of the list.
+    """
+    # Same window arithmetic as /setup-stats so the two endpoints align
+    # when called with the same `weeks` value.
+    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    this_monday = today_local - timedelta(days=today_local.weekday())
+    start_monday = this_monday - timedelta(weeks=weeks - 1)
+
+    # Two-stage aggregation: first per-trade P/L, then per-(planned,
+    # actual) bucket. Identical signed-quantity P/L formula as the rest
+    # of the analytics module — see module docstring for the caveat
+    # about partially-closed positions.
+    sql = f"""
+        WITH trade_stats AS (
+            SELECT
+                t.tradeid,
+                t.setup           AS planned,
+                t.intended_setup  AS actual,
+                (
+                    COALESCE(SUM(-e.quantity * e.tradeprice), 0)
+                    + COALESCE(SUM(e.ibcommission), 0)
+                )::numeric AS pnl
+            FROM trades t
+            JOIN executions e ON e.trade_fk = t.tradeid
+            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+              AND t.setup           IS NOT NULL
+              AND t.intended_setup  IS NOT NULL
+            GROUP BY t.tradeid, t.setup, t.intended_setup
+        )
+        SELECT
+            planned,
+            actual,
+            COUNT(*)::int                                AS trade_count,
+            COUNT(*) FILTER (WHERE pnl > 0)::int         AS wins,
+            COUNT(*) FILTER (WHERE pnl < 0)::int         AS losses,
+            COUNT(*) FILTER (WHERE pnl = 0)::int         AS scratches,
+            SUM(pnl)::numeric                            AS total_pnl,
+            AVG(pnl)::numeric                            AS avg_pnl
+        FROM trade_stats
+        GROUP BY planned, actual
+        ORDER BY total_pnl ASC NULLS LAST, planned ASC, actual ASC
+    """
+    rows = await db_conn.fetch(sql, start_monday)
+
+    out: list[PlanVsActualRow] = []
+    for r in rows:
+        trade_count: int = r["trade_count"]
+        wins: int = r["wins"]
+        out.append(
+            PlanVsActualRow(
+                planned_setup=r["planned"],
+                actual_setup=r["actual"],
+                trade_count=trade_count,
+                wins=wins,
+                losses=r["losses"],
+                scratches=r["scratches"],
+                win_rate=(wins / trade_count) if trade_count > 0 else 0.0,
+                total_pnl=Decimal(r["total_pnl"]),
+                avg_pnl=Decimal(r["avg_pnl"]),
+            )
+        )
+
+    logger.info(
+        "plan-vs-actual computed | weeks=%d buckets=%d (deviations=%d)",
+        weeks, len(out),
+        sum(1 for r in out if r.planned_setup != r.actual_setup),
+    )
+
+    return PlanVsActualResponse(weeks=weeks, rows=out)

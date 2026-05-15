@@ -39,7 +39,9 @@ function parsePnl(value: string | null | undefined): number | null {
 
 function fmtPnl(n: number): string {
   const sign = n >= 0 ? "+" : "−";
-  const abs = Math.abs(n).toLocaleString(undefined, {
+  // Pin the locale so SSR and the browser produce the same string —
+  // `undefined` uses the runtime default and breaks hydration.
+  const abs = Math.abs(n).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });

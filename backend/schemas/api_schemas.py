@@ -324,3 +324,38 @@ class SetupStatsResponse(BaseModel):
     group_by: str
     weeks: int
     rows: list[SetupStatsRow]
+
+
+class PlanVsActualRow(BaseModel):
+    """One (planned setup → actual setup) bucket over the requested window.
+
+    Only trades where both ``setup`` (planned) and ``intended_setup``
+    (actual) are populated contribute — the mapping is meaningless
+    otherwise. Trades with no executions linked are also excluded (no
+    P/L computable).
+
+    A row where ``planned_setup == actual_setup`` is a *matched* trade
+    (you did what you intended). Any other row is a *deviation* — the
+    cost of those rows is the question this view exists to answer.
+
+    P/L fields are Decimal-as-string at the API boundary. ``total_pnl``
+    is the summed realised P/L over every trade in the bucket;
+    ``avg_pnl`` is per-trade.
+    """
+    planned_setup: str
+    actual_setup: str
+    trade_count: int
+    wins: int
+    losses: int
+    scratches: int
+    win_rate: float  # 0.0–1.0
+    total_pnl: Decimal
+    avg_pnl: Decimal
+
+
+class PlanVsActualResponse(BaseModel):
+    """Response for GET /api/analytics/plan-vs-actual. Rows are sorted
+    by ``total_pnl`` ascending so the costliest deviations bubble to
+    the top. ``weeks`` echoes the window size used."""
+    weeks: int
+    rows: list[PlanVsActualRow]

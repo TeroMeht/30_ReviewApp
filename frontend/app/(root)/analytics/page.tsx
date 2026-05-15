@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import HeaderBox from "@/components/HeaderBox";
 import WeeklyPnlChart from "@/components/analytics/WeeklyPnlChart";
 import SetupStatsTable from "@/components/analytics/SetupStatsTable";
+import PlanVsActualTable from "@/components/analytics/PlanVsActualTable";
 import { API_PREFIX } from "@/lib/api_prefix";
 import type { WeeklyPnlResponse } from "@/lib/types";
 
@@ -208,6 +209,44 @@ export default function AnalyticsPage() {
           </div>
           <SetupStatsTable />
         </div>
+
+        {/* Plan-vs-actual deviations. Restricted to trades where both
+            planned and intended setups are labelled — see component for
+            why. Independent window + filter controls inside. */}
+        <div
+          style={{
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+            background: "#fff",
+            padding: 16,
+            marginTop: 16,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: "#0f172a",
+              borderBottom: "1px solid #e2e8f0",
+              paddingBottom: 6,
+              marginBottom: 4,
+            }}
+          >
+            Plan vs. actual — what each deviation costs
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: "#64748b",
+              marginBottom: 12,
+            }}
+          >
+            Only includes trades where both the planned setup and the
+            executed (intended) setup are labelled. Sorted by total P/L
+            ascending — the costliest mappings are at the top.
+          </div>
+          <PlanVsActualTable />
+        </div>
       </div>
     </section>
   );
@@ -254,7 +293,10 @@ function pill(active: boolean): React.CSSProperties {
 
 function fmtMoney(n: number): string {
   const sign = n < 0 ? "−" : n > 0 ? "+" : "";
-  const abs = Math.abs(n).toLocaleString(undefined, {
+  // Pin the locale so SSR (Node, often en-US) and the browser agree —
+  // `undefined` here pulled from the runtime default and caused a
+  // hydration mismatch in non-en-US browsers.
+  const abs = Math.abs(n).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });

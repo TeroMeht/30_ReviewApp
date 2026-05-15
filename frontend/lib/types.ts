@@ -303,3 +303,30 @@ export interface SetupStatsResponse {
   weeks: number;
   rows: SetupStatsRow[];
 }
+
+/** One (planned setup → actual setup) bucket from
+ *  GET /api/analytics/plan-vs-actual. Only trades with both `setup`
+ *  and `intended_setup` populated contribute. A row where
+ *  `planned_setup === actual_setup` is a matched trade; any other row
+ *  is a deviation. P/L fields are Decimal-as-string. */
+export interface PlanVsActualRow {
+  planned_setup: string;
+  actual_setup: string;
+  trade_count: number;
+  wins: number;
+  losses: number;
+  scratches: number;
+  /** 0.0–1.0. wins / trade_count (scratches count in denominator). */
+  win_rate: number;
+  /** Summed realised P/L over the bucket. Decimal as string. */
+  total_pnl: string;
+  /** Per-trade average P/L over the bucket. Decimal as string. */
+  avg_pnl: string;
+}
+
+/** Response for GET /api/analytics/plan-vs-actual. Rows are sorted by
+ *  `total_pnl` ascending so the costliest deviations are at the top. */
+export interface PlanVsActualResponse {
+  weeks: number;
+  rows: PlanVsActualRow[];
+}
