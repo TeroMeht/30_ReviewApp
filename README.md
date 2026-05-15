@@ -3,6 +3,12 @@
 Project skeleton mirroring the architecture of `26_ReactFastApp`. Copy this
 folder, rename, and start building.
 
+# Deployment
+
+Set database config in .env
+npm install
+
+
 ## Layout
 
 ```

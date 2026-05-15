@@ -423,11 +423,26 @@ async def get_trade_neighbors(tradeid: int, db_conn=Depends(get_db_conn)):
 
 
 @router.get("/{tradeid}/week", response_model=list[Trade])
-async def get_trades_in_week(tradeid: int, db_conn=Depends(get_db_conn)):
-    """All trades in the Mon–Sun Helsinki week that contains this trade.
+async def get_trades_in_week(
+    tradeid: int,
+    offset: int = 0,
+    db_conn=Depends(get_db_conn),
+):
+    """All trades in a Mon–Sun Helsinki week, anchored on this trade's week.
 
-    Used by the 'Weekly trades' table on the Trade Review page so the
-    user can see the rest of the week at a glance. Sorted oldest → newest.
+    `offset` shifts which week is returned, in whole weeks, relative to
+    the anchor trade's week:
+      *  0 → this trade's own week (default)
+      * -1 → the week before
+      * +1 → the week after
+    Used by the weekly table's prev/next-week controls so the user can
+    browse adjacent weeks without changing the reviewed trade.
+
+    `execution_count` and `realized_pnl` are computed inline (mirroring
+    the /day endpoint) so the weekly table can show per-trade fills + P/L
+    and sum them for a week total without a second roundtrip. See the
+    /day endpoint for notes on the signed-quantity arithmetic and the
+    flat-vs-partially-closed caveat.
     """
     try:
         await fetch_trade_by_id(db_conn, tradeid)
@@ -440,20 +455,29 @@ async def get_trades_in_week(tradeid: int, db_conn=Depends(get_db_conn)):
           SELECT date_trunc(
             'week',
             (date AT TIME ZONE '{LOCAL_TZ}')::date::timestamp
-          ) AS week_start
+          ) + ($2::int * INTERVAL '1 week') AS week_start
           FROM trades WHERE tradeid = $1
         )
         SELECT t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
                t.observed_setup, t.price_action_rating, t.price_position,
-               t.category, t.notes
-        FROM   trades t, ref
+               t.category, t.notes,
+               COUNT(DISTINCT e.iborderid)::int AS execution_count,
+               CASE WHEN COUNT(e.tradeid) = 0 THEN NULL
+                    ELSE COALESCE(SUM(-e.quantity * e.tradeprice), 0)
+                         + COALESCE(SUM(e.ibcommission), 0)
+               END AS realized_pnl
+        FROM   trades t
+        CROSS JOIN ref
+        LEFT JOIN executions e ON e.trade_fk = t.tradeid
         WHERE  date_trunc(
                  'week',
                  (t.date AT TIME ZONE '{LOCAL_TZ}')::date::timestamp
                ) = ref.week_start
+        GROUP BY t.tradeid, ref.week_start
         ORDER BY t.date ASC, t.tradeid ASC
         """,
         tradeid,
+        offset,
     )
     return [Trade(**dict(r)) for r in rows]
 

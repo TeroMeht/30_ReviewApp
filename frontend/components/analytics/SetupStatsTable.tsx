@@ -15,7 +15,6 @@
  *   • Avg loss ($), negative
  *   • Avg win hold (min:sec)
  *   • Avg loss hold (min:sec)
- *   • Expectancy ($/trade) — colored by sign
  */
 
 import { useEffect, useState } from "react";
@@ -27,7 +26,6 @@ const WEEK_OPTIONS = [4, 8, 12, 26, 52] as const;
 
 const COLOR_PROFIT = "#16a34a";
 const COLOR_LOSS = "#dc2626";
-const COLOR_NEUTRAL = "#475569";
 
 function parseDec(v: string | null): number | null {
   if (v == null) return null;
@@ -62,11 +60,6 @@ function fmtDuration(sec: number | null): string {
   if (m > 0) parts.push(`${m}m`);
   if (s > 0 || parts.length === 0) parts.push(`${s}s`);
   return parts.join(" ");
-}
-
-function moneyColor(n: number | null): string {
-  if (n === null || n === 0) return COLOR_NEUTRAL;
-  return n > 0 ? COLOR_PROFIT : COLOR_LOSS;
 }
 
 export default function SetupStatsTable() {
@@ -186,14 +179,12 @@ export default function SetupStatsTable() {
                 <th style={{ ...th, textAlign: "right" }}>Avg loss</th>
                 <th style={{ ...th, textAlign: "right" }}>Avg win hold</th>
                 <th style={{ ...th, textAlign: "right" }}>Avg loss hold</th>
-                <th style={{ ...th, textAlign: "right" }}>Expectancy</th>
               </tr>
             </thead>
             <tbody>
               {data.rows.map((r) => {
                 const avgWin = parseDec(r.avg_win);
                 const avgLoss = parseDec(r.avg_loss);
-                const expectancy = parseDec(r.expectancy) ?? 0;
                 return (
                   <tr
                     key={r.setup}
@@ -256,16 +247,6 @@ export default function SetupStatsTable() {
                       }}
                     >
                       {fmtDuration(r.avg_loss_hold_sec)}
-                    </td>
-                    <td
-                      style={{
-                        ...td,
-                        ...numCell,
-                        color: moneyColor(expectancy),
-                        fontWeight: 700,
-                      }}
-                    >
-                      {fmtMoney(expectancy)}
                     </td>
                   </tr>
                 );

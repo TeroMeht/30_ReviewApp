@@ -184,6 +184,7 @@ export default function TradeReviewPage() {
             by default), so we don't add a panelHdr here. */}
         <WeeklyTradesTable
           currentTradeId={trade.tradeid}
+          currentTradeDate={trade.date}
           weekKey={trade.tradeid}
           onSelectTrade={handleSelectTrade}
         />

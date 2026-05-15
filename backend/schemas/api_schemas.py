@@ -47,16 +47,18 @@ class Trade(BaseModel):
     TEXT[] mapped to a Python list.
 
     ``execution_count`` is opt-in: most endpoints leave it as None. The
-    /trades/{id}/day endpoint populates it with COUNT(DISTINCT iborderid)
-    so the daily table can show how many distinct orders made up each
-    trade (multiple fills sharing the same iborderid count as one).
+    /trades/{id}/day and /trades/{id}/week endpoints populate it with
+    COUNT(DISTINCT iborderid) so the daily and weekly tables can show how
+    many distinct orders made up each trade (multiple fills sharing the
+    same iborderid count as one).
 
-    ``realized_pnl`` is also opt-in and populated by /trades/{id}/day. It is
-    the net realised P/L computed from this trade's linked executions:
-    SUM(sell cash – buy cash) + SUM(ibCommission). IB commission is stored
-    as a negative number (it's a cost), so simple addition gives net P/L.
-    Returned as a string so the API stays Decimal-safe; the frontend
-    parses it. Will be None if the trade has no executions yet.
+    ``realized_pnl`` is also opt-in and populated by /trades/{id}/day and
+    /trades/{id}/week. It is the net realised P/L computed from this
+    trade's linked executions: SUM(sell cash – buy cash) + SUM(ibCommission).
+    IB commission is stored as a negative number (it's a cost), so simple
+    addition gives net P/L. Returned as a string so the API stays
+    Decimal-safe; the frontend parses it. Will be None if the trade has
+    no executions yet.
     """
     tradeid: int
     symbol: str
