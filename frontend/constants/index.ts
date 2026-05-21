@@ -11,6 +11,11 @@ export const sidebarLinks = [
     label: "Trade Review",
   },
   {
+    imgURL: "/icons/playbook.svg",
+    route: "/playbook",
+    label: "Playbook",
+  },
+  {
     imgURL: "/icons/dollar-circle.svg",
     route: "/analytics",
     label: "Analytics",

@@ -330,3 +330,66 @@ export interface PlanVsActualResponse {
   weeks: number;
   rows: PlanVsActualRow[];
 }
+
+/** One row of GET /api/playbook/setups — a setup label with aggregate
+ *  stats over the requested window. Powers the Playbook page's section
+ *  list. `total_pnl` is Decimal-as-string. */
+export interface PlaybookSetupSummary {
+  setup_label: string;
+  trade_count: number;
+  total_pnl: string;
+}
+
+/** Response for GET /api/playbook/setups. Rows ordered by `trade_count`
+ *  desc — most-observed setups first. `weeks` is null when window=all. */
+export interface PlaybookSetupsResponse {
+  weeks: number | null;
+  rows: PlaybookSetupSummary[];
+}
+
+/** One trade as it appears in the Playbook chart grid. Slim subset of
+ *  Trade plus realized_pnl and the full observed_setup list so the
+ *  card can render its '+ other observed setups' chip. */
+export interface PlaybookTradeSummary {
+  tradeid: number;
+  symbol: string;
+  /** ISO datetime — first execution time, Helsinki timezone. */
+  date: string;
+  setup: string | null;
+  intended_setup: string | null;
+  observed_setup: string[] | null;
+  /** Decimal as string; null when the trade has no executions. */
+  realized_pnl: string | null;
+}
+
+/** Response for GET /api/playbook/setups/{label}/trades. Trades sorted
+ *  by date desc — most recent first. */
+export interface PlaybookTradesResponse {
+  setup_label: string;
+  weeks: number | null;
+  trades: PlaybookTradeSummary[];
+}
+
+/** Structured strategy notes for one setup. All text fields default to
+ *  empty string so a setup that's never been written about still
+ *  returns a well-formed object. `updated_at` is null when no row has
+ *  been saved yet. */
+export interface PlaybookNotes {
+  setup_label: string;
+  description: string;
+  entry_rules: string;
+  exit_rules: string;
+  common_mistakes: string;
+  examples: string;
+  updated_at: string | null;
+}
+
+/** Body for PUT /api/playbook/setups/{label}/notes. Sent fields
+ *  overwrite; omitted fields keep their existing values (PATCH-style). */
+export interface PlaybookNotesUpdate {
+  description?: string;
+  entry_rules?: string;
+  exit_rules?: string;
+  common_mistakes?: string;
+  examples?: string;
+}

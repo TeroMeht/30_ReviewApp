@@ -359,3 +359,77 @@ class PlanVsActualResponse(BaseModel):
     the top. ``weeks`` echoes the window size used."""
     weeks: int
     rows: list[PlanVsActualRow]
+
+
+# ─── Playbook ─────────────────────────────────────────────────────────────────
+
+class PlaybookSetupSummary(BaseModel):
+    """One row of GET /api/playbook/setups — a setup label with its
+    aggregate stats over the requested window. Powers the Playbook
+    page's section list.
+
+    ``total_pnl`` is the summed realised P/L over every trade where this
+    label appears in ``observed_setup``. Trades with no executions are
+    excluded (no P/L). A trade with multiple observed setups contributes
+    its full P/L to each setup's total — the Playbook is a per-pattern
+    study view, not an attribution model.
+    """
+    setup_label: str
+    trade_count: int
+    total_pnl: Decimal
+
+
+class PlaybookSetupsResponse(BaseModel):
+    """Response for GET /api/playbook/setups. Rows are sorted by
+    ``trade_count`` descending — most observed setups first."""
+    weeks: Optional[int] = None  # None when window=all
+    rows: list[PlaybookSetupSummary]
+
+
+class PlaybookTradeSummary(BaseModel):
+    """One trade as it appears in the Playbook chart grid for a given
+    setup. Slim subset of ``Trade`` plus the precomputed ``realized_pnl``
+    and the full ``observed_setup`` list so the card can render its
+    "+ other observed setups" chip without a second roundtrip.
+    """
+    tradeid: int
+    symbol: str
+    date: datetime
+    setup: Optional[str] = None
+    intended_setup: Optional[str] = None
+    observed_setup: Optional[list[str]] = None
+    realized_pnl: Optional[Decimal] = None
+
+
+class PlaybookTradesResponse(BaseModel):
+    """Response for GET /api/playbook/setups/{label}/trades. Trades are
+    sorted by ``date`` descending — most recent first. ``setup_label``
+    echoes which observed-setup label was queried."""
+    setup_label: str
+    weeks: Optional[int] = None
+    trades: list[PlaybookTradeSummary]
+
+
+class PlaybookNotes(BaseModel):
+    """Structured strategy notes for one setup. All fields default to
+    empty string so a setup that's never been written about still
+    returns a well-formed object — keeps the frontend simple. Mirrored
+    by the columns in db/playbook.py."""
+    setup_label: str
+    description: str = ""
+    entry_rules: str = ""
+    exit_rules: str = ""
+    common_mistakes: str = ""
+    examples: str = ""
+    updated_at: Optional[datetime] = None
+
+
+class PlaybookNotesUpdate(BaseModel):
+    """Request body for PUT /api/playbook/setups/{label}/notes. All
+    fields optional — sent fields overwrite, omitted fields keep their
+    existing values."""
+    description: Optional[str] = None
+    entry_rules: Optional[str] = None
+    exit_rules: Optional[str] = None
+    common_mistakes: Optional[str] = None
+    examples: Optional[str] = None
