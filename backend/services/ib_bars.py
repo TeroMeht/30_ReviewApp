@@ -66,6 +66,20 @@ _HELSINKI_TZ = ZoneInfo(LOCAL_TZ)
 _TICKER_LOCK: asyncio.Lock = asyncio.Lock()
 
 
+# ─── IB request timeout ──────────────────────────────────────────────────────
+#
+# `ib.reqHistoricalDataAsync` will occasionally never return — IB acknowledges
+# the request but then never sends data and never sends an error. Without a
+# timeout the await blocks forever, which means `_TICKER_LOCK` is held forever
+# and the entire batch queue freezes. We wrap each request in `asyncio.wait_for`
+# so a hang is converted to a TimeoutError, the timeframe is marked as errored,
+# the lock is released, and the next trade in the queue can proceed.
+#
+# 60s is well above IB's typical historical-data response time (a few seconds
+# to ~20s for large 2-min/5-day pulls) so genuine slow responses still succeed.
+_IB_REQUEST_TIMEOUT_SEC: float = 60.0
+
+
 # ─── In-memory bar-fetch status tracking ──────────────────────────────────────
 #
 # These maps let the UI show per-trade fetch status while a background task
@@ -208,14 +222,29 @@ async def _fetch_one_timeframe(
     )
 
     try:
-        bars = await ib.reqHistoricalDataAsync(
-            contract,
-            endDateTime=end_dt,
-            durationStr=tf.duration,
-            barSizeSetting=tf.bar_size,
-            whatToShow="TRADES",
-            useRTH=False,
-            formatDate=2,  # tz-aware UTC datetime / date for daily
+        bars = await asyncio.wait_for(
+            ib.reqHistoricalDataAsync(
+                contract,
+                endDateTime=end_dt,
+                durationStr=tf.duration,
+                barSizeSetting=tf.bar_size,
+                whatToShow="TRADES",
+                useRTH=False,
+                formatDate=2,  # tz-aware UTC datetime / date for daily
+            ),
+            timeout=_IB_REQUEST_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        # IB never sent data and never sent an error — most common hang mode.
+        # Surface as a normal per-timeframe error so the rest of the queue
+        # continues; the lock is released by the surrounding `async with`.
+        logger.warning(
+            "[bars %s/%s tradeid=%d] IB request timed out after %.0fs",
+            trade.symbol, tf.label, trade.tradeid, _IB_REQUEST_TIMEOUT_SEC,
+        )
+        return BarFetchTimeframeResult(
+            timeframe=tf.label, inserted=0, skipped=False,
+            error=f"ib_timeout_{int(_IB_REQUEST_TIMEOUT_SEC)}s",
         )
     except Exception as e:
         logger.exception(
