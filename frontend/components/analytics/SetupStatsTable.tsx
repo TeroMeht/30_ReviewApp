@@ -3,9 +3,9 @@
 /**
  * Per-setup win/loss + hold-time stats table.
  *
- * Self-contained: owns its own weeks-window and group_by controls and
- * its own data fetch lifecycle. Dropped into the analytics page next
- * to the weekly P/L chart but independent of it.
+ * `weeks` and `groupBy` are passed in by the parent so every analytics
+ * panel on the page stays in sync with a single shared control row.
+ * Local data-fetch lifecycle only.
  *
  * Columns:
  *   • Setup
@@ -22,7 +22,6 @@ import { API_PREFIX } from "@/lib/api_prefix";
 import type { SetupStatsResponse } from "@/lib/types";
 
 type GroupBy = "intended_setup" | "setup";
-const WEEK_OPTIONS = [4, 8, 12, 26, 52] as const;
 
 const COLOR_PROFIT = "#16a34a";
 const COLOR_LOSS = "#dc2626";
@@ -64,9 +63,14 @@ function fmtDuration(sec: number | null): string {
   return parts.join(" ");
 }
 
-export default function SetupStatsTable() {
-  const [weeks, setWeeks] = useState<number>(12);
-  const [groupBy, setGroupBy] = useState<GroupBy>("intended_setup");
+interface Props {
+  /** Window size in weeks — controlled by the analytics page. */
+  weeks: number;
+  /** Which setup column to attribute P/L to — controlled by the page. */
+  groupBy: GroupBy;
+}
+
+export default function SetupStatsTable({ weeks, groupBy }: Props) {
   const [data, setData] = useState<SetupStatsResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,56 +108,6 @@ export default function SetupStatsTable() {
 
   return (
     <div>
-      {/* Local controls row — independent of the weekly chart above. */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 16,
-          alignItems: "flex-end",
-          marginBottom: 12,
-        }}
-      >
-        <ControlGroup label="Window">
-          <div style={{ display: "flex", gap: 4 }}>
-            {WEEK_OPTIONS.map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setWeeks(n)}
-                style={pill(weeks === n)}
-                aria-pressed={weeks === n}
-              >
-                {n}w
-              </button>
-            ))}
-          </div>
-        </ControlGroup>
-
-        <ControlGroup label="Attribute to">
-          <div style={{ display: "flex", gap: 4 }}>
-            <button
-              type="button"
-              onClick={() => setGroupBy("intended_setup")}
-              style={pill(groupBy === "intended_setup")}
-              aria-pressed={groupBy === "intended_setup"}
-              title="Group by what was actually executed"
-            >
-              Actual
-            </button>
-            <button
-              type="button"
-              onClick={() => setGroupBy("setup")}
-              style={pill(groupBy === "setup")}
-              aria-pressed={groupBy === "setup"}
-              title="Group by what was planned"
-            >
-              Planned
-            </button>
-          </div>
-        </ControlGroup>
-      </div>
-
       {error && (
         <div style={{ color: "#b91c1c", fontSize: 12 }}>
           Failed to load setup stats: {error}
@@ -259,45 +213,6 @@ export default function SetupStatsTable() {
       )}
     </div>
   );
-}
-
-function ControlGroup({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <span
-        style={{
-          fontSize: 10,
-          fontWeight: 600,
-          letterSpacing: "0.07em",
-          textTransform: "uppercase",
-          color: "#64748b",
-        }}
-      >
-        {label}
-      </span>
-      {children}
-    </div>
-  );
-}
-
-function pill(active: boolean): React.CSSProperties {
-  return {
-    padding: "5px 10px",
-    fontSize: 12,
-    borderRadius: 999,
-    border: active ? "1px solid #2563eb" : "1px solid #e2e8f0",
-    background: active ? "#dbeafe" : "#fff",
-    color: active ? "#1e3a8a" : "#475569",
-    cursor: "pointer",
-    fontWeight: active ? 600 : 400,
-    fontFamily: "inherit",
-  };
 }
 
 const th: React.CSSProperties = {

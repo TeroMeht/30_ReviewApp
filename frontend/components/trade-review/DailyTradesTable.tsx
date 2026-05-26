@@ -117,13 +117,19 @@ export default function DailyTradesTable({
 
   // Day-level aggregates. `tradesWithPnl` is the count of trades that
   // actually have fills — used in the footer so the user knows the sum
-  // excludes manual-only rows.
+  // excludes manual-only rows. `totalExecs` sums the per-trade Execs
+  // column (each trade's count of distinct ibOrderIDs) so the header
+  // surfaces the day's overall order count alongside P/L.
   const totalTrades = trades.length;
   const pnls = trades
     .map((t) => parsePnl(t.realized_pnl))
     .filter((n): n is number => n !== null);
   const tradesWithPnl = pnls.length;
   const totalPnl = pnls.reduce((acc, n) => acc + n, 0);
+  const totalExecs = trades.reduce(
+    (acc, t) => acc + (t.execution_count ?? 0),
+    0
+  );
 
   return (
     <div>
@@ -151,6 +157,12 @@ export default function DailyTradesTable({
             </span>
           </span>
         )}
+        <span>
+          Total execs:{" "}
+          <span style={{ color: "#0f172a", fontWeight: 600 }}>
+            {totalExecs}
+          </span>
+        </span>
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
@@ -298,7 +310,17 @@ export default function DailyTradesTable({
                     : ""}
                   )
                 </td>
-                <td style={td} />
+                <td
+                  style={{
+                    ...td,
+                    textAlign: "center",
+                    fontVariantNumeric: "tabular-nums",
+                    color: "#0f172a",
+                    fontWeight: 700,
+                  }}
+                >
+                  {totalExecs}
+                </td>
                 <td
                   style={{
                     ...td,
@@ -317,7 +339,7 @@ export default function DailyTradesTable({
         </table>
       </div>
     </div>
-  );
+);
 }
 
 const th: React.CSSProperties = {

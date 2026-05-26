@@ -1,16 +1,18 @@
 "use client";
 
 /**
- * Analytics page. First chart: weekly P/L per setup.
+ * Analytics page — single shared control row at the top, every panel
+ * below it consumes the same `weeks` / `group_by` values.
  *
- * Reads /api/analytics/weekly-pnl. Two user-controllable knobs:
+ * Two user-controllable knobs:
  *   • weeks       — rolling window size (default 12)
  *   • group_by    — attribute P/L to intended_setup (actual, default)
- *                   or setup (planned)
- * The chart re-fetches whenever either control changes.
+ *                   or setup (planned). Only relevant for panels that
+ *                   bucket by setup (weekly P/L chart, setup stats);
+ *                   the scatter and plan-vs-actual panels ignore it.
  *
- * The page is deliberately thin: it owns the controls + data
- * lifecycle, and delegates rendering to <WeeklyPnlChart />.
+ * The page owns the controls + the weekly-P/L fetch lifecycle; each
+ * child component owns its own fetch keyed on the props passed in.
  */
 
 import { useEffect, useState } from "react";
@@ -18,8 +20,12 @@ import HeaderBox from "@/components/HeaderBox";
 import WeeklyPnlChart from "@/components/analytics/WeeklyPnlChart";
 import SetupStatsTable from "@/components/analytics/SetupStatsTable";
 import PlanVsActualTable from "@/components/analytics/PlanVsActualTable";
+import PnlVsExecsScatter from "@/components/analytics/PnlVsExecsScatter";
 import { API_PREFIX } from "@/lib/api_prefix";
-import type { WeeklyPnlResponse } from "@/lib/types";
+import type {
+  DailyPnlExecsResponse,
+  WeeklyPnlResponse,
+} from "@/lib/types";
 
 type GroupBy = "intended_setup" | "setup";
 
@@ -31,6 +37,14 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<WeeklyPnlResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Scatter (P/L vs daily execs) lifecycle. Lives at the page level so
+  // it reacts to the shared `weeks` control without any plumbing. It
+  // ignores `groupBy` — the scatter aggregates per-day across every
+  // trade regardless of setup.
+  const [scatter, setScatter] = useState<DailyPnlExecsResponse | null>(null);
+  const [scatterLoading, setScatterLoading] = useState<boolean>(false);
+  const [scatterError, setScatterError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +77,38 @@ export default function AnalyticsPage() {
     };
   }, [weeks, groupBy]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setScatterLoading(true);
+    setScatterError(null);
+    (async () => {
+      try {
+        const url = `${API_PREFIX}/analytics/daily-pnl-vs-execs?weeks=${weeks}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const j = await res.json();
+            if (j?.detail) detail = String(j.detail);
+          } catch {
+            /* keep status */
+          }
+          throw new Error(detail);
+        }
+        const json: DailyPnlExecsResponse = await res.json();
+        if (!cancelled) setScatter(json);
+      } catch (e) {
+        if (!cancelled)
+          setScatterError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setScatterLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [weeks]);
+
   // Window-wide grand total — sum across every (week, setup) cell.
   const grandTotal =
     data?.weeks.reduce((acc, w) => {
@@ -84,7 +130,7 @@ export default function AnalyticsPage() {
           />
         </header>
 
-        {/* Controls row. */}
+        {/* Controls row — shared by every panel below. */}
         <div
           style={{
             display: "flex",
@@ -161,7 +207,7 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Chart panel. */}
+        {/* Weekly P/L per setup. */}
         <div
           style={{
             border: "1px solid #e2e8f0",
@@ -184,8 +230,56 @@ export default function AnalyticsPage() {
           {data && <WeeklyPnlChart data={data} />}
         </div>
 
-        {/* Per-setup win/loss + hold-time stats. Independent window
-            and group_by controls live inside the component. */}
+        {/* Daily P/L vs daily execution count. Consumes the shared
+            `weeks` control above. Ignores `groupBy` — the scatter
+            aggregates across every trade per day regardless of setup. */}
+        <div
+          style={{
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+            background: "#fff",
+            padding: 16,
+            marginTop: 16,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: "#0f172a",
+              borderBottom: "1px solid #e2e8f0",
+              paddingBottom: 6,
+              marginBottom: 4,
+            }}
+          >
+            Daily P/L vs. execution count
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: "#64748b",
+              marginBottom: 12,
+            }}
+          >
+            One dot per trading day. X = sum of distinct IB order IDs
+            across every trade that day (same as the daily table&apos;s
+            &ldquo;Total execs&rdquo;). Y = day&apos;s realised P/L.
+            The dashed line is an ordinary-least-squares fit so you can
+            see whether high-execution days trend positive or negative.
+          </div>
+          {scatterError && (
+            <div style={{ color: "#b91c1c", fontSize: 12 }}>
+              Failed to load scatter: {scatterError}
+            </div>
+          )}
+          {!scatterError && scatterLoading && !scatter && (
+            <div style={{ color: "#94a3b8", fontSize: 12 }}>Loading…</div>
+          )}
+          {scatter && <PnlVsExecsScatter data={scatter} />}
+        </div>
+
+        {/* Per-setup win/loss + hold-time stats. Driven by the shared
+            page-level weeks + groupBy controls. */}
         <div
           style={{
             border: "1px solid #e2e8f0",
@@ -207,12 +301,13 @@ export default function AnalyticsPage() {
           >
             Setup stats — win/loss size and hold time
           </div>
-          <SetupStatsTable />
+          <SetupStatsTable weeks={weeks} groupBy={groupBy} />
         </div>
 
         {/* Plan-vs-actual deviations. Restricted to trades where both
             planned and intended setups are labelled — see component for
-            why. Independent window + filter controls inside. */}
+            why. Uses the shared `weeks` control; keeps its own
+            deviations-only toggle as a table-local concern. */}
         <div
           style={{
             border: "1px solid #e2e8f0",
@@ -245,7 +340,7 @@ export default function AnalyticsPage() {
             executed (intended) setup are labelled. Sorted by total P/L
             ascending — the costliest mappings are at the top.
           </div>
-          <PlanVsActualTable />
+          <PlanVsActualTable weeks={weeks} />
         </div>
       </div>
     </section>

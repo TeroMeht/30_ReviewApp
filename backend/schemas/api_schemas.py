@@ -361,6 +361,32 @@ class PlanVsActualResponse(BaseModel):
     rows: list[PlanVsActualRow]
 
 
+class DailyPnlExecsPoint(BaseModel):
+    """One trading day's aggregate execution count and realised P/L.
+
+    Powers the scatter that plots whether high-execution days correlate
+    with better or worse P/L. ``exec_count`` is the sum of distinct
+    ``iborderid`` values across every trade on the day (matches the
+    "Total execs" stat in the daily table). ``trade_count`` is the
+    number of trades on the day. ``date`` is the Helsinki calendar day.
+
+    Days with no executions are excluded by the endpoint — manual-only
+    rows would skew the X axis with phantom zeros.
+    """
+    date: date
+    total_pnl: Decimal
+    exec_count: int
+    trade_count: int
+
+
+class DailyPnlExecsResponse(BaseModel):
+    """Response for GET /api/analytics/daily-pnl-vs-execs. ``points`` is
+    ordered chronologically (oldest day first). ``weeks`` echoes the
+    window size used so the frontend can title the chart."""
+    weeks: int
+    points: list[DailyPnlExecsPoint]
+
+
 # ─── Playbook ─────────────────────────────────────────────────────────────────
 
 class PlaybookSetupSummary(BaseModel):

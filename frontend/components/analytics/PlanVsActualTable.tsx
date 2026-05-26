@@ -7,8 +7,10 @@
  * of each combination. Designed to answer: "I planned VWAP continuation
  * but ended up taking no setup — how much is that costing me?"
  *
- * Self-contained: owns its own weeks-window control and an optional
- * "deviations only" filter that hides matched (planned == actual) rows.
+ * `weeks` is passed in by the parent so this panel shares the single
+ * control row at the top of the analytics page. The "deviations only"
+ * filter is kept local because it's a table-specific concern.
+ *
  * Backed by GET /api/analytics/plan-vs-actual which already filters to
  * trades that have BOTH setup and intended_setup labelled — the mapping
  * makes no sense otherwise.
@@ -29,8 +31,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { API_PREFIX } from "@/lib/api_prefix";
 import type { PlanVsActualResponse } from "@/lib/types";
-
-const WEEK_OPTIONS = [4, 8, 12, 26, 52] as const;
 
 const COLOR_PROFIT = "#16a34a";
 const COLOR_LOSS = "#dc2626";
@@ -64,8 +64,12 @@ function moneyColor(n: number): string {
   return n > 0 ? COLOR_PROFIT : COLOR_LOSS;
 }
 
-export default function PlanVsActualTable() {
-  const [weeks, setWeeks] = useState<number>(12);
+interface Props {
+  /** Window size in weeks — controlled by the analytics page. */
+  weeks: number;
+}
+
+export default function PlanVsActualTable({ weeks }: Props) {
   const [deviationsOnly, setDeviationsOnly] = useState<boolean>(false);
   const [data, setData] = useState<PlanVsActualResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -126,7 +130,8 @@ export default function PlanVsActualTable() {
 
   return (
     <div>
-      {/* Local controls — independent of the setup-stats table above. */}
+      {/* Local table-specific filter only — the weeks control lives
+          at the page level so every analytics panel stays in sync. */}
       <div
         style={{
           display: "flex",
@@ -136,22 +141,6 @@ export default function PlanVsActualTable() {
           marginBottom: 12,
         }}
       >
-        <ControlGroup label="Window">
-          <div style={{ display: "flex", gap: 4 }}>
-            {WEEK_OPTIONS.map((n) => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setWeeks(n)}
-                style={pill(weeks === n)}
-                aria-pressed={weeks === n}
-              >
-                {n}w
-              </button>
-            ))}
-          </div>
-        </ControlGroup>
-
         <ControlGroup label="Show">
           <div style={{ display: "flex", gap: 4 }}>
             <button

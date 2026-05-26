@@ -331,6 +331,27 @@ export interface PlanVsActualResponse {
   rows: PlanVsActualRow[];
 }
 
+/** One day in the analytics scatter that plots P/L vs daily execution
+ *  count. `date` is the Helsinki calendar day (YYYY-MM-DD). `exec_count`
+ *  is the sum of distinct ibOrderIDs across every trade that day —
+ *  matches the daily table's "Total execs" stat. Days with no
+ *  executions are excluded by the backend. */
+export interface DailyPnlExecsPoint {
+  /** YYYY-MM-DD — Helsinki calendar day. */
+  date: string;
+  /** Decimal as string. Sum of per-trade realised P/L on this day. */
+  total_pnl: string;
+  exec_count: number;
+  trade_count: number;
+}
+
+/** Response for GET /api/analytics/daily-pnl-vs-execs. `points` are
+ *  ordered chronologically (oldest first). */
+export interface DailyPnlExecsResponse {
+  weeks: number;
+  points: DailyPnlExecsPoint[];
+}
+
 /** One row of GET /api/playbook/setups — a setup label with aggregate
  *  stats over the requested window. Powers the Playbook page's section
  *  list. `total_pnl` is Decimal-as-string. */

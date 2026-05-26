@@ -87,3 +87,38 @@ echo   Backend:  http://127.0.0.1:8000   ^(docs at /docs^)
 echo   Frontend: http://localhost:3000
 echo.
 echo Close the two cmd windows to stop the services.
+
+REM ─── Wait for the frontend, then open it in the default browser ──────
+REM `npm run dev` needs a few seconds before it accepts connections; polling
+REM with curl (bundled in Windows 10+) is friendlier than a blind sleep so
+REM the browser opens as soon as the page is actually ready. Falls back to a
+REM fixed delay if curl isn't on PATH.
+set "UI_URL=http://localhost:3000"
+
+where curl >nul 2>&1
+if errorlevel 1 goto :ui_fixed_delay
+goto :ui_poll
+
+:ui_fixed_delay
+echo [start.bat] curl not found -- waiting 12s before opening browser.
+timeout /t 12 /nobreak >nul
+goto :ui_open
+
+:ui_poll
+echo [start.bat] Waiting for frontend at %UI_URL% ...
+set /a UI_TRIES=0
+
+:ui_wait
+curl -s -o nul -m 1 %UI_URL% >nul 2>&1
+if not errorlevel 1 goto :ui_open
+set /a UI_TRIES+=1
+if %UI_TRIES% GEQ 60 (
+    echo [start.bat] Frontend didn't respond after 60s -- opening anyway.
+    goto :ui_open
+)
+timeout /t 1 /nobreak >nul
+goto :ui_wait
+
+:ui_open
+echo [start.bat] Opening %UI_URL% in the default browser...
+start "" "%UI_URL%"

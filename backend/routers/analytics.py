@@ -36,6 +36,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from dependencies import get_db_conn
 from db.trades import LOCAL_TZ
 from schemas.api_schemas import (
+    DailyPnlExecsPoint,
+    DailyPnlExecsResponse,
     PlanVsActualResponse,
     PlanVsActualRow,
     SetupStatsResponse,
@@ -374,3 +376,75 @@ async def get_plan_vs_actual(
     )
 
     return PlanVsActualResponse(weeks=weeks, rows=out)
+
+
+@router.get("/daily-pnl-vs-execs", response_model=DailyPnlExecsResponse)
+async def get_daily_pnl_vs_execs(
+    weeks: int = Query(
+        12, ge=1, le=104,
+        description="Number of Mon..Sun weeks to include, ending on the current Helsinki week.",
+    ),
+    db_conn=Depends(get_db_conn),
+) -> DailyPnlExecsResponse:
+    """Per-Helsinki-day total realised P/L and total execution count.
+
+    Drives the analytics-page scatter that asks "do high-execution days
+    correlate with better or worse P/L?". Each returned point is one
+    calendar day with at least one execution. ``exec_count`` is the sum
+    of distinct ``iborderid`` values across every trade that day —
+    matches the "Total execs" stat surfaced in the daily table footer.
+
+    Days with no executions are excluded. The window arithmetic mirrors
+    /weekly-pnl so the same `weeks` value snaps to the same start
+    Monday as the other analytics endpoints.
+    """
+    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    this_monday = today_local - timedelta(days=today_local.weekday())
+    start_monday = this_monday - timedelta(weeks=weeks - 1)
+
+    # Two-stage aggregation: first per-trade (so COUNT(DISTINCT
+    # iborderid) is correct — each IB order with N partial fills counts
+    # once), then per-day. Same signed-quantity P/L formula as every
+    # other endpoint in this module.
+    sql = f"""
+        WITH per_trade AS (
+            SELECT
+                (t.date AT TIME ZONE '{LOCAL_TZ}')::date AS local_date,
+                t.tradeid,
+                COUNT(DISTINCT e.iborderid)::int           AS execs,
+                (
+                    COALESCE(SUM(-e.quantity * e.tradeprice), 0)
+                    + COALESCE(SUM(e.ibcommission), 0)
+                )::numeric                                  AS pnl
+            FROM trades t
+            JOIN executions e ON e.trade_fk = t.tradeid
+            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+            GROUP BY local_date, t.tradeid
+        )
+        SELECT
+            local_date,
+            SUM(execs)::int     AS exec_count,
+            SUM(pnl)::numeric   AS total_pnl,
+            COUNT(*)::int       AS trade_count
+        FROM per_trade
+        GROUP BY local_date
+        ORDER BY local_date ASC
+    """
+    rows = await db_conn.fetch(sql, start_monday)
+
+    points = [
+        DailyPnlExecsPoint(
+            date=r["local_date"],
+            total_pnl=Decimal(r["total_pnl"]),
+            exec_count=r["exec_count"],
+            trade_count=r["trade_count"],
+        )
+        for r in rows
+    ]
+
+    logger.info(
+        "daily-pnl-vs-execs computed | weeks=%d days=%d",
+        weeks, len(points),
+    )
+
+    return DailyPnlExecsResponse(weeks=weeks, points=points)
