@@ -459,3 +459,41 @@ class PlaybookNotesUpdate(BaseModel):
     exit_rules: Optional[str] = None
     common_mistakes: Optional[str] = None
     examples: Optional[str] = None
+
+
+# ─── Weekly Review (Claude-generated) ─────────────────────────────────────────
+
+class WeeklyReview(BaseModel):
+    """A stored, Claude-generated review for one Mon–Sun (Helsinki) week.
+
+    ``week_start`` is the Monday anchoring the week. ``content`` is the
+    review body as markdown. ``stats`` is the aggregate snapshot the
+    review was built from (P/L, trade count, win rate, number of plan
+    deviations, etc.) so the page can show headline numbers without
+    recomputing. ``model`` records which Anthropic model produced it.
+    """
+    week_start: date
+    model: str = ""
+    content: str = ""
+    stats: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[datetime] = None
+
+
+class WeeklyReviewWeek(BaseModel):
+    """One selectable week in GET /api/reviews/weeks.
+
+    ``week_start`` is the Monday (local). ``label`` is a human range like
+    '2026-05-25 → 2026-05-31'. ``trade_count`` is how many trades fall in
+    the week (0 weeks are still listed so the user can pick recent empty
+    weeks). ``has_review`` is True if a generated review is already stored.
+    """
+    week_start: date
+    week_end: date
+    label: str
+    trade_count: int
+    has_review: bool
+
+
+class WeeklyReviewWeeksResponse(BaseModel):
+    """Response for GET /api/reviews/weeks — newest week first."""
+    weeks: list[WeeklyReviewWeek]

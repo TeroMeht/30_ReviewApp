@@ -414,3 +414,41 @@ export interface PlaybookNotesUpdate {
   common_mistakes?: string;
   examples?: string;
 }
+
+// ─── Weekly Review (Claude-generated) ─────────────────────────────────────────
+
+/** Aggregate snapshot the review was built from. */
+export interface WeeklyReviewStats {
+  trade_count?: number;
+  trades_with_pnl?: number;
+  total_pnl?: number;
+  wins?: number;
+  losses?: number;
+  scratches?: number;
+  win_rate?: number;
+  total_execs?: number;
+  plan_deviations?: number;
+}
+
+/** A stored Claude-generated review for one Mon–Sun (Helsinki) week. */
+export interface WeeklyReview {
+  week_start: string;
+  model: string;
+  /** Review body as markdown. */
+  content: string;
+  stats: WeeklyReviewStats;
+  created_at: string | null;
+}
+
+/** One selectable week in GET /api/reviews/weeks. */
+export interface WeeklyReviewWeek {
+  week_start: string;
+  week_end: string;
+  label: string;
+  trade_count: number;
+  has_review: boolean;
+}
+
+export interface WeeklyReviewWeeksResponse {
+  weeks: WeeklyReviewWeek[];
+}

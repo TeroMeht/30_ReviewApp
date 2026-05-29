@@ -30,6 +30,7 @@ import type { Trade, TradeUpdate } from "@/lib/types";
 const SETUP_OPTIONS = [
   "No setup",
   "VWAP continuation",
+  "VWAP continuation short",
   "Reversal short",
   "Reversal long",
   "Parabolic short",
@@ -38,6 +39,12 @@ const SETUP_OPTIONS = [
   "Opening range breakdown",
   "Swing exit",
 ] as const;
+
+// Observed setups omit "No setup" and "Swing exit" — not meaningful as
+// background observations on a ticker.
+const OBSERVED_OPTIONS = SETUP_OPTIONS.filter(
+  (o) => o !== "No setup" && o !== "Swing exit"
+);
 
 // Quality categories — worst → best so the dropdown reads in the same
 // order the user thinks about them.
@@ -186,7 +193,7 @@ export default function EditPanel({ trade, onSaved }: Props) {
 
       <Field label="Observed setups (also on ticker today)">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-          {SETUP_OPTIONS.map((opt) => {
+          {OBSERVED_OPTIONS.map((opt) => {
             const active = observedSetup.includes(opt);
             return (
               <button

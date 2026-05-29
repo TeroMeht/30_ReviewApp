@@ -21,6 +21,11 @@ export const sidebarLinks = [
     label: "Analytics",
   },
   {
+    imgURL: "/icons/playbook.svg",
+    route: "/weekly-review",
+    label: "Weekly Review",
+  },
+  {
     imgURL: "/icons/transaction.svg",
     route: "/data-management",
     label: "Data Management",

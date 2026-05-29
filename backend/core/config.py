@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     API_PREFIX: str
     ALLOWED_ORIGINS: str
 
+    # --- Anthropic (Weekly Review) ---
+    # Drop your key into the .env file when ready. Empty by default so the
+    # backend boots without it; the /api/reviews endpoint returns a clean
+    # 503 if it's missing rather than crashing at startup.
+    ANTHROPIC_API_KEY: str
+    # Model used to generate weekly trade reviews. Override in .env to use
+    # Opus for deeper analysis or Haiku for cheap/fast drafts.
+    ANTHROPIC_MODEL: str
+
 
 
     # --- IB Flex Web Service (historical executions with accurate timestamps) ---
