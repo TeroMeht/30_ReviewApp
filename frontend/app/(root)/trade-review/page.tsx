@@ -22,7 +22,7 @@
  *   /trade-review?id=42      → specific trade
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { API_PREFIX } from "@/lib/api_prefix";
 import type {
@@ -39,6 +39,14 @@ import ReviewHeader from "@/components/trade-review/ReviewHeader";
 import WeeklyTradesTable from "@/components/trade-review/WeeklyTradesTable";
 
 export default function TradeReviewPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#64748b" }}>Loading trade…</div>}>
+      <TradeReviewPageInner />
+    </Suspense>
+  );
+}
+
+function TradeReviewPageInner() {
   const router = useRouter();
   const search = useSearchParams();
   const idParam = search.get("id");

@@ -440,13 +440,47 @@ export default function TradeChart({
       const isBuy = first.buySell.toUpperCase() === "BUY";
       const targetSec = helsinkiWallSeconds(first.dateTime) as number;
       const snapped = nearestBarTime(targetSec, barSeconds, timeframe);
-      markers.push({
-        time: snapped as UTCTimestamp,
-        position: isBuy ? "belowBar" : "aboveBar",
-        color: isBuy ? "#2563eb" : "#dc2626",
-        shape: isBuy ? "arrowUp" : "arrowDown",
-        // No text — arrows only.
-      });
+
+      // Volume-weighted average fill price for the order — used to
+      // anchor the marker on the price axis for the 2-min chart.
+      let totalQty = 0;
+      let pxQty = 0;
+      for (const f of fills) {
+        const q = Number(f.quantity) || 0;
+        const p = Number(f.tradePrice) || 0;
+        totalQty += Math.abs(q);
+        pxQty += Math.abs(q) * p;
+      }
+      const avgPrice = totalQty > 0 ? pxQty / totalQty : Number(first.tradePrice) || 0;
+
+      if (timeframe === "2min") {
+        // 2-min chart: anchor markers to the actual fill price (not the
+        // time-axis above/below bar position) and make them larger so
+        // they're easy to read. Label with qty @ price · HH:MM Helsinki.
+        const totalQtyAbs = totalQty || Math.abs(Number(first.quantity) || 0);
+        const parts = HELSINKI_FMT.formatToParts(new Date(first.dateTime));
+        const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+        const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+        const priceStr = avgPrice.toFixed(2);
+        const label = `${totalQtyAbs} @ ${priceStr} · ${hh}:${mm}`;
+        markers.push({
+          time: snapped as UTCTimestamp,
+          position: "atPriceMiddle",
+          price: avgPrice,
+          color: isBuy ? "#2563eb" : "#dc2626",
+          shape: isBuy ? "arrowUp" : "arrowDown",
+          size: 1,
+          text: label,
+        });
+      } else {
+        markers.push({
+          time: snapped as UTCTimestamp,
+          position: isBuy ? "belowBar" : "aboveBar",
+          color: isBuy ? "#2563eb" : "#dc2626",
+          shape: isBuy ? "arrowUp" : "arrowDown",
+          // No text — arrows only.
+        });
+      }
     }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
 

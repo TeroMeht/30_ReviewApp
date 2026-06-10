@@ -4,7 +4,11 @@ export const sidebarLinks = [
     route: "/",
     label: "Home",
   },
-
+  {
+    imgURL: "/icons/transaction.svg",
+    route: "/data-management",
+    label: "Data Management",
+  },
   {
     imgURL: "/icons/monitor.svg",
     route: "/trade-review",
@@ -25,11 +29,7 @@ export const sidebarLinks = [
     route: "/weekly-review",
     label: "Weekly Review",
   },
-  {
-    imgURL: "/icons/transaction.svg",
-    route: "/data-management",
-    label: "Data Management",
-  },
+
 ];
 
 // good_user / good_password - Bank of America
