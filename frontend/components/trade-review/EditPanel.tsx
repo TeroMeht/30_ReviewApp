@@ -167,7 +167,7 @@ export default function EditPanel({ trade, onSaved }: Props) {
           style={{
             ...input,
             ...(deviation
-              ? { borderColor: "#f59e0b", background: "#fffbeb" }
+              ? { border: "1px solid #f59e0b", background: "#fffbeb" }
               : null),
           }}
         >

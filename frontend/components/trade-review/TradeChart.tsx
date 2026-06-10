@@ -39,6 +39,12 @@ interface Props {
   height?: number;
   /** Optional overlays (EMA, VWAP, …) — one LineSeries per entry. */
   indicators?: IndicatorSeries[];
+  /** When true, the chart suppresses the auto-generated "last value" badge
+   *  and the dashed line that draws at the most recent close on candles
+   *  and volume. Indicator reference lines (Relatr ±0.5, Rvol 2) are also
+   *  hidden. Used by the Playbook view where only the execution markers
+   *  and their text labels should appear. */
+  hideLastValueLabels?: boolean;
 }
 
 const HELSINKI_FMT = new Intl.DateTimeFormat("en-GB", {
@@ -98,6 +104,7 @@ export default function TradeChart({
   label,
   height = 320,
   indicators,
+  hideLastValueLabels = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -152,12 +159,16 @@ export default function TradeChart({
       borderDownColor: "#dc2626",
       wickUpColor: "#16a34a",
       wickDownColor: "#dc2626",
+      lastValueVisible: !hideLastValueLabels,
+      priceLineVisible: !hideLastValueLabels,
     });
 
     const volume = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
       priceScaleId: "",
       color: "#94a3b8",
+      lastValueVisible: !hideLastValueLabels,
+      priceLineVisible: !hideLastValueLabels,
     });
     volume.priceScale().applyOptions({
       scaleMargins: { top: 0.82, bottom: 0 },
@@ -332,7 +343,7 @@ export default function TradeChart({
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
-            axisLabelVisible: true,
+            axisLabelVisible: !hideLastValueLabels,
             title: "0",
           });
           series.createPriceLine({
@@ -340,7 +351,7 @@ export default function TradeChart({
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Solid,
-            axisLabelVisible: true,
+            axisLabelVisible: !hideLastValueLabels,
             title: "+0.5",
           });
           series.createPriceLine({
@@ -348,7 +359,7 @@ export default function TradeChart({
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Solid,
-            axisLabelVisible: true,
+            axisLabelVisible: !hideLastValueLabels,
             title: "-0.5",
           });
         }
@@ -360,7 +371,7 @@ export default function TradeChart({
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
-            axisLabelVisible: true,
+            axisLabelVisible: !hideLastValueLabels,
             title: "2",
           });
         }

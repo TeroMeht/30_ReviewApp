@@ -277,6 +277,11 @@ export default function PlaybookChartCard({ trade, sectionLabel }: Props) {
             // panes inside TradeChart have room.
             height={360}
             indicators={bars.indicators}
+            // Playbook view: only the execution markers and their text
+            // labels should appear — strip the right-axis last-value
+            // badges, the dashed last-close line, and indicator
+            // reference-level labels.
+            hideLastValueLabels
           />
         )}
       </div>
