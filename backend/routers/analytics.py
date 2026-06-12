@@ -42,6 +42,8 @@ from schemas.api_schemas import (
     PlanVsActualRow,
     SetupStatsResponse,
     SetupStatsRow,
+    WeeklyExecsBucket,
+    WeeklyExecsResponse,
     WeeklyPnlBucket,
     WeeklyPnlResponse,
 )
@@ -448,3 +450,92 @@ async def get_daily_pnl_vs_execs(
     )
 
     return DailyPnlExecsResponse(weeks=weeks, points=points)
+
+
+@router.get("/weekly-execs", response_model=WeeklyExecsResponse)
+async def get_weekly_execs(
+    weeks: int = Query(
+        12, ge=1, le=104,
+        description="Number of Mon..Sun weeks to include, ending on the current Helsinki week.",
+    ),
+    db_conn=Depends(get_db_conn),
+) -> WeeklyExecsResponse:
+    """Per-week total execution count over the last ``weeks`` weeks.
+
+    Drives the analytics-page bar chart that shows how the weekly volume
+    of executions trends over time. ``exec_count`` is the sum of distinct
+    ``iborderid`` values across every trade in the week — matches the
+    daily "Total execs" metric, aggregated to the week.
+
+    The response always contains exactly ``weeks`` buckets in
+    chronological order so the chart renders a stable x-axis even on
+    weeks with no activity. Window arithmetic mirrors every other
+    analytics endpoint in this module.
+    """
+    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    this_monday = today_local - timedelta(days=today_local.weekday())
+    start_monday = this_monday - timedelta(weeks=weeks - 1)
+    all_week_starts: list[date] = [
+        start_monday + timedelta(weeks=i) for i in range(weeks)
+    ]
+
+    # Two-stage aggregation mirrors /daily-pnl-vs-execs: first per-trade
+    # so COUNT(DISTINCT iborderid) is correct (each IB order with N
+    # partial fills counts once), then per Helsinki-anchored week. Sums
+    # P/L too, using the same signed-quantity formula as every other
+    # endpoint in this module (see module docstring).
+    sql = f"""
+        WITH per_trade AS (
+            SELECT
+                (date_trunc(
+                    'week',
+                    ((t.date AT TIME ZONE '{LOCAL_TZ}')::date)::timestamp
+                ))::date                          AS week_start,
+                t.tradeid                          AS tradeid,
+                COUNT(DISTINCT e.iborderid)::int   AS execs,
+                (
+                    COALESCE(SUM(-e.quantity * e.tradeprice), 0)
+                    + COALESCE(SUM(e.ibcommission), 0)
+                )::numeric                          AS pnl
+            FROM trades t
+            JOIN executions e ON e.trade_fk = t.tradeid
+            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+            GROUP BY week_start, t.tradeid
+        )
+        SELECT
+            week_start,
+            SUM(execs)::int     AS exec_count,
+            COUNT(*)::int       AS trade_count,
+            SUM(pnl)::numeric   AS total_pnl
+        FROM per_trade
+        GROUP BY week_start
+        ORDER BY week_start ASC
+    """
+    rows = await db_conn.fetch(sql, start_monday)
+
+    # Prefill empty weeks so the chart has a stable x-axis.
+    bucket_by_start: dict[date, WeeklyExecsBucket] = {
+        ws: WeeklyExecsBucket(
+            week_start=ws, exec_count=0, trade_count=0, total_pnl=Decimal(0)
+        )
+        for ws in all_week_starts
+    }
+    for r in rows:
+        ws: date = r["week_start"]
+        if ws in bucket_by_start:
+            bucket_by_start[ws] = WeeklyExecsBucket(
+                week_start=ws,
+                exec_count=int(r["exec_count"]),
+                trade_count=int(r["trade_count"]),
+                total_pnl=Decimal(r["total_pnl"]),
+            )
+
+    logger.info(
+        "weekly-execs computed | weeks=%d non-empty=%d",
+        weeks, sum(1 for b in bucket_by_start.values() if b.exec_count > 0),
+    )
+
+    return WeeklyExecsResponse(
+        window_weeks=weeks,
+        weeks=[bucket_by_start[ws] for ws in all_week_starts],
+    )

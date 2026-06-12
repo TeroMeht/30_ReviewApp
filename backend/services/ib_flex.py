@@ -58,6 +58,13 @@ _FLEX_DOWNLOAD = f"{_FLEX_BASE}/GetStatement"
 _DEFAULT_POLL_TIMEOUT_SEC = 60.0
 _POLL_INTERVAL_SEC = 2.0
 
+# Symbols we explicitly skip when parsing Flex Trade rows. These are
+# IB cash-FX conversion legs (the broker auto-converts to USD when the
+# account holds non-USD funds), not real trades — they don't belong in
+# the trade journal. Compared against the *normalised* symbol so case
+# variants from IB are caught too.
+_SKIP_SYMBOLS = frozenset({"EUR.USD", "USD.EUR"})
+
 
 
 
@@ -174,9 +181,21 @@ def parse_flex_executions(xml_body: str) -> list[Execution]:
         raise RuntimeError(f"Flex report is not valid XML: {e}") from e
 
     out: list[Execution] = []
+    skipped_fx = 0
 
     # Parse all <Trade> elements anywhere in XML
     for trade_elem in root.iter("Trade"):
+        # Normalise the symbol upfront so the FX-skip check sees the
+        # canonical form (matches what would be stored in executions.symbol).
+        symbol = normalize_symbol(_row_get(trade_elem, "symbol") or "")
+
+        # Drop EUR.USD / USD.EUR currency-conversion legs — they aren't
+        # trades, they're the broker auto-converting cash balances and
+        # would pollute the journal.
+        if symbol in _SKIP_SYMBOLS:
+            skipped_fx += 1
+            continue
+
         dateTime_str = _row_get(trade_elem, "dateTime") or ""
         ts = _parse_flex_datetime(dateTime_str)
 
@@ -204,7 +223,7 @@ def parse_flex_executions(xml_body: str) -> list[Execution]:
                 # by executions.symbol, so any cleanup HAS to happen at
                 # insert time or the JOIN in sync_trades_from_executions
                 # won't link CFD-derived rows.
-                symbol=normalize_symbol(_row_get(trade_elem, "symbol") or ""),
+                symbol=symbol,
                 tradeID=(_row_get(trade_elem, "tradeID") or "").strip(),
                 buySell=_action_for_buy_sell(_row_get(trade_elem, "buySell")),
                 quantity=quantity,
@@ -214,11 +233,15 @@ def parse_flex_executions(xml_body: str) -> list[Execution]:
             )
         )
 
-    logger.info("Parsed %d trades from XML", len(out))
+    logger.info(
+        "Parsed %d trades from XML (skipped %d FX conversion rows)",
+        len(out),
+        skipped_fx,
+    )
     return out
 
 
-# ─── Orchestrator ─────────────────────────────────────────────────────────────
+# ─── Orchestrator ───────────────────────────────────────────────────────────────────────
 
 
 async def fetch_executions_from_ib(*,poll_timeout_sec: float = _DEFAULT_POLL_TIMEOUT_SEC) -> list[Execution]:

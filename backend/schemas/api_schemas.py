@@ -387,6 +387,33 @@ class DailyPnlExecsResponse(BaseModel):
     points: list[DailyPnlExecsPoint]
 
 
+class WeeklyExecsBucket(BaseModel):
+    """One Mon..Sun (Helsinki) week's total execution count.
+
+    ``week_start`` is the Monday anchoring the bucket. ``exec_count`` is
+    the sum of distinct ``iborderid`` values across every trade in that
+    week — matches the per-day "Total execs" metric, aggregated by week.
+    ``trade_count`` is the number of distinct trades in the week.
+    ``total_pnl`` is the summed realised P/L over every trade in the week
+    (Decimal-as-string at the API boundary). Includes trades whose
+    setup column is NULL — unlike /weekly-pnl, which excludes them.
+    Empty weeks are still returned (zeros) so the chart x-axis is stable.
+    """
+    week_start: date
+    exec_count: int
+    trade_count: int
+    total_pnl: Decimal
+
+
+class WeeklyExecsResponse(BaseModel):
+    """Response for GET /api/analytics/weekly-execs. ``weeks`` is
+    contiguous (every Mon..Sun bucket in the requested window is
+    present, even empty ones). ``window_weeks`` echoes the window size
+    used."""
+    window_weeks: int
+    weeks: list[WeeklyExecsBucket]
+
+
 # ─── Playbook ─────────────────────────────────────────────────────────────────
 
 class PlaybookSetupSummary(BaseModel):

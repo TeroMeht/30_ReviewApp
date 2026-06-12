@@ -352,6 +352,29 @@ export interface DailyPnlExecsResponse {
   points: DailyPnlExecsPoint[];
 }
 
+/** One week's total execution count. `week_start` is the Monday
+ *  (Europe/Helsinki) anchoring the bucket. `exec_count` is the sum of
+ *  distinct ibOrderIDs across every trade in the week. `total_pnl` is
+ *  the summed realised P/L over every trade in the week (Decimal as
+ *  string; includes trades with NULL setup, unlike /weekly-pnl). Empty
+ *  weeks are returned with zeros so the chart x-axis stays stable. */
+export interface WeeklyExecsBucket {
+  /** YYYY-MM-DD — Monday in Europe/Helsinki. */
+  week_start: string;
+  exec_count: number;
+  trade_count: number;
+  /** Decimal as string. */
+  total_pnl: string;
+}
+
+/** Response for GET /api/analytics/weekly-execs. `weeks` is contiguous
+ *  (every Mon..Sun bucket in the requested window is present, even
+ *  empty ones). */
+export interface WeeklyExecsResponse {
+  window_weeks: number;
+  weeks: WeeklyExecsBucket[];
+}
+
 /** One row of GET /api/playbook/setups — a setup label with aggregate
  *  stats over the requested window. Powers the Playbook page's section
  *  list. `total_pnl` is Decimal-as-string. */
@@ -439,8 +462,7 @@ export interface WeeklyReview {
   stats: WeeklyReviewStats;
   created_at: string | null;
 }
-
-/** One selectable week in GET /api/reviews/weeks. */
+/** One selectable week in GET /api/reviews/weeks. */
 export interface WeeklyReviewWeek {
   week_start: string;
   week_end: string;

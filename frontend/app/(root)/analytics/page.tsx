@@ -20,10 +20,10 @@ import HeaderBox from "@/components/HeaderBox";
 import WeeklyPnlChart from "@/components/analytics/WeeklyPnlChart";
 import SetupStatsTable from "@/components/analytics/SetupStatsTable";
 import PlanVsActualTable from "@/components/analytics/PlanVsActualTable";
-import PnlVsExecsScatter from "@/components/analytics/PnlVsExecsScatter";
+import WeeklyExecsBarChart from "@/components/analytics/WeeklyExecsBarChart";
 import { API_PREFIX } from "@/lib/api_prefix";
 import type {
-  DailyPnlExecsResponse,
+  WeeklyExecsResponse,
   WeeklyPnlResponse,
 } from "@/lib/types";
 
@@ -38,13 +38,13 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Scatter (P/L vs daily execs) lifecycle. Lives at the page level so
+  // Weekly executions bar chart lifecycle. Lives at the page level so
   // it reacts to the shared `weeks` control without any plumbing. It
-  // ignores `groupBy` — the scatter aggregates per-day across every
-  // trade regardless of setup.
-  const [scatter, setScatter] = useState<DailyPnlExecsResponse | null>(null);
-  const [scatterLoading, setScatterLoading] = useState<boolean>(false);
-  const [scatterError, setScatterError] = useState<string | null>(null);
+  // ignores `groupBy` — the bar chart aggregates executions across
+  // every trade in the week regardless of setup.
+  const [execs, setExecs] = useState<WeeklyExecsResponse | null>(null);
+  const [execsLoading, setExecsLoading] = useState<boolean>(false);
+  const [execsError, setExecsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,11 +79,11 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    setScatterLoading(true);
-    setScatterError(null);
+    setExecsLoading(true);
+    setExecsError(null);
     (async () => {
       try {
-        const url = `${API_PREFIX}/analytics/daily-pnl-vs-execs?weeks=${weeks}`;
+        const url = `${API_PREFIX}/analytics/weekly-execs?weeks=${weeks}`;
         const res = await fetch(url);
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
@@ -95,13 +95,13 @@ export default function AnalyticsPage() {
           }
           throw new Error(detail);
         }
-        const json: DailyPnlExecsResponse = await res.json();
-        if (!cancelled) setScatter(json);
+        const json: WeeklyExecsResponse = await res.json();
+        if (!cancelled) setExecs(json);
       } catch (e) {
         if (!cancelled)
-          setScatterError(e instanceof Error ? e.message : String(e));
+          setExecsError(e instanceof Error ? e.message : String(e));
       } finally {
-        if (!cancelled) setScatterLoading(false);
+        if (!cancelled) setExecsLoading(false);
       }
     })();
     return () => {
@@ -230,9 +230,9 @@ export default function AnalyticsPage() {
           {data && <WeeklyPnlChart data={data} />}
         </div>
 
-        {/* Daily P/L vs daily execution count. Consumes the shared
-            `weeks` control above. Ignores `groupBy` — the scatter
-            aggregates across every trade per day regardless of setup. */}
+        {/* Weekly executions trend. Consumes the shared `weeks` control
+            above. Ignores `groupBy` — execution counts are aggregated
+            across every trade in the week regardless of setup. */}
         <div
           style={{
             border: "1px solid #e2e8f0",
@@ -252,7 +252,7 @@ export default function AnalyticsPage() {
               marginBottom: 4,
             }}
           >
-            Daily P/L vs. execution count
+            Weekly execution count
           </div>
           <div
             style={{
@@ -261,21 +261,21 @@ export default function AnalyticsPage() {
               marginBottom: 12,
             }}
           >
-            One dot per trading day. X = sum of distinct IB order IDs
-            across every trade that day (same as the daily table&apos;s
-            &ldquo;Total execs&rdquo;). Y = day&apos;s realised P/L.
-            The dashed line is an ordinary-least-squares fit so you can
-            see whether high-execution days trend positive or negative.
+            One bar per Mon..Sun week. Y = sum of distinct IB order IDs
+            across every trade in the week (same definition as the
+            daily table&apos;s &ldquo;Total execs&rdquo;, aggregated to
+            the week). Useful for spotting trends in how active you are
+            over time.
           </div>
-          {scatterError && (
+          {execsError && (
             <div style={{ color: "#b91c1c", fontSize: 12 }}>
-              Failed to load scatter: {scatterError}
+              Failed to load weekly executions: {execsError}
             </div>
           )}
-          {!scatterError && scatterLoading && !scatter && (
+          {!execsError && execsLoading && !execs && (
             <div style={{ color: "#94a3b8", fontSize: 12 }}>Loading…</div>
           )}
-          {scatter && <PnlVsExecsScatter data={scatter} />}
+          {execs && <WeeklyExecsBarChart data={execs} />}
         </div>
 
         {/* Per-setup win/loss + hold-time stats. Driven by the shared
