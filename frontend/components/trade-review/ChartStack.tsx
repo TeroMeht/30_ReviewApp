@@ -37,6 +37,11 @@ export default function ChartStack({ tradeid, executions }: Props) {
     "2min": null,
   });
   const [loading, setLoading] = useState<boolean>(true);
+  // EMA9 crossover markers on the 2-min chart are opt-out — the
+  // checkbox only appears above the 2-min chart since it's the only
+  // timeframe that draws them.
+  const [show2minCrossovers, setShow2minCrossovers] =
+    useState<boolean>(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,14 +142,51 @@ export default function ChartStack({ tradeid, executions }: Props) {
                 {label}: no bars in DB yet — run “Update Market Data”.
               </div>
             ) : (
-              <TradeChart
-                bars={data.bars}
-                executions={executions}
-                timeframe={tf}
-                label={label}
-                height={height}
-                indicators={data.indicators}
-              />
+              <>
+                {tf === "2min" && (
+                  <div
+                    style={{
+                      marginBottom: 6,
+                      fontSize: 12,
+                      color: "#475569",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <label
+                      style={{
+                        cursor: "pointer",
+                        userSelect: "none",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={show2minCrossovers}
+                        onChange={(e) =>
+                          setShow2minCrossovers(e.target.checked)
+                        }
+                      />
+                      Show EMA9 crossover marks (|Relatr| &gt; 0.45 in last
+                      5 bars)
+                    </label>
+                  </div>
+                )}
+                <TradeChart
+                  bars={data.bars}
+                  executions={executions}
+                  timeframe={tf}
+                  label={label}
+                  height={height}
+                  indicators={data.indicators}
+                  showCrossoverMarkers={
+                    tf === "2min" ? show2minCrossovers : false
+                  }
+                />
+              </>
             )}
           </div>
         );

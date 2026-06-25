@@ -21,13 +21,21 @@ class TimeframeSpec(NamedTuple):
     table: str          # PG table name
     bar_size: str       # IBKR barSizeSetting, e.g. "1 day", "30 mins", "2 mins"
     duration: str       # IBKR durationStr, e.g. "1 Y", "30 D", "5 D"
+    use_rth: bool       # IBKR useRTH — True = regular trading hours only,
+                        # False = include pre/post-market. Daily bars use
+                        # RTH so ATR matches the user's RTH-based daily
+                        # OHLC (extended hours inflate the daily range and
+                        # therefore ATR, which shrinks Relatr). Intraday
+                        # timeframes keep extended hours so pre/post-market
+                        # action shows up on the chart.
 
 
-# Locked-in lookbacks: Daily 1Y / 30min 30D / 2min 5D, RTH only, TRADES.
+# Locked-in lookbacks: Daily 1Y / 30min 30D / 2min 5D.
+# useRTH=True only for daily — see TimeframeSpec.use_rth.
 TIMEFRAMES: list[TimeframeSpec] = [
-    TimeframeSpec("daily", "trade_bars_daily", "1 day",  "1 Y"),
-    TimeframeSpec("30min", "trade_bars_30min", "30 mins", "30 D"),
-    TimeframeSpec("2min",  "trade_bars_2min",  "2 mins",  "5 D"),
+    TimeframeSpec("daily", "trade_bars_daily", "1 day",   "1 Y",  use_rth=True),
+    TimeframeSpec("30min", "trade_bars_30min", "30 mins", "30 D", use_rth=False),
+    TimeframeSpec("2min",  "trade_bars_2min",  "2 mins",  "5 D",  use_rth=False),
 ]
 
 # Fast lookup by label.

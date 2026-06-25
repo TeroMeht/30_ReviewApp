@@ -41,10 +41,14 @@ interface Props {
   indicators?: IndicatorSeries[];
   /** When true, the chart suppresses the auto-generated "last value" badge
    *  and the dashed line that draws at the most recent close on candles
-   *  and volume. Indicator reference lines (Relatr ±0.5, Rvol 2) are also
+   *  and volume. Indicator reference lines (Relatr ±0.45, Rvol 1) are also
    *  hidden. Used by the Playbook view where only the execution markers
    *  and their text labels should appear. */
   hideLastValueLabels?: boolean;
+  /** Show EMA9 crossover markers on the 2-min chart, filtered to bars
+   *  where Relatr extended past ±0.45 in the last 5 bars (mean-reversion
+   *  setup). No-op for non-2min timeframes. Default: true. */
+  showCrossoverMarkers?: boolean;
 }
 
 const HELSINKI_FMT = new Intl.DateTimeFormat("en-GB", {
@@ -105,11 +109,20 @@ export default function TradeChart({
   height = 320,
   indicators,
   hideLastValueLabels = false,
+  showCrossoverMarkers = true,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  // The markers plugin is created LAZILY on the first markers-effect run
+  // and reused thereafter via setMarkers(...). Calling createSeriesMarkers
+  // repeatedly would stack new plugin instances on top of the old ones,
+  // so old markers would never be removed — which manifests as the
+  // crossover toggle "doing nothing" once markers are first drawn.
+  const markersPluginRef = useRef<ReturnType<
+    typeof createSeriesMarkers
+  > | null>(null);
   // Keyed by indicator.name. Track pane + kind alongside the series so
   // we can detect when an indicator switches pane/type and recreate it
   // (those aren't mutable via applyOptions).
@@ -184,8 +197,10 @@ export default function TradeChart({
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
       // Series are owned by the chart instance — `chart.remove()` disposes
-      // them; we just clear our lookup map.
+      // them; we just clear our lookup map. Same story for the markers
+      // plugin: it's attached to the candle series which is now gone.
       indicatorSeriesRef.current.clear();
+      markersPluginRef.current = null;
     };
   }, [height]);
 
@@ -334,7 +349,7 @@ export default function TradeChart({
         entry = { series, pane, kind };
         indicatorSeriesRef.current.set(ind.name, entry);
 
-        // Relatr reference levels: 0 (mid) and ±0.5 (typical reversion
+        // Relatr reference levels: 0 (mid) and ±0.45 (typical reversion
         // bands). createPriceLine is only called once at series-creation
         // time so it doesn't accumulate duplicates across re-renders.
         if (ind.name === "relatr") {
@@ -347,32 +362,32 @@ export default function TradeChart({
             title: "0",
           });
           series.createPriceLine({
-            price: 0.5,
+            price: 0.45,
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Solid,
             axisLabelVisible: !hideLastValueLabels,
-            title: "+0.5",
+            title: "+0.45",
           });
           series.createPriceLine({
-            price: -0.5,
+            price: -0.45,
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Solid,
             axisLabelVisible: !hideLastValueLabels,
-            title: "-0.5",
+            title: "-0.45",
           });
         }
 
-        // Rvol "above-average" threshold: 2× cumulative-vs-baseline.
+        // Rvol "above-average" threshold: 1× cumulative-vs-baseline.
         if (ind.name === "rvol") {
           series.createPriceLine({
-            price: 2,
+            price: 1,
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
             axisLabelVisible: !hideLastValueLabels,
-            title: "2",
+            title: "1",
           });
         }
       } else {
@@ -493,10 +508,94 @@ export default function TradeChart({
         });
       }
     }
-    markers.sort((a, b) => (a.time as number) - (b.time as number));
+    // ─── EMA9 crossover markers (2-min only) ─────────────────────────────
+    // Triangle markers on bars where the close crosses the EMA9 AND Relatr
+    // pushed past ±0.45 within the trailing 5-bar window — i.e. a mean-
+    // reversion signal after an extension. Bullish crossover (close moves
+    // up through EMA9) requires Relatr > +0.45 in window; bearish (close
+    // moves down through EMA9) requires Relatr < -0.45.
+    //
+    // Sign convention recap: Relatr = (VWAP − Close)/ATR, so positive
+    // Relatr = price BELOW VWAP (room to rally), negative = price ABOVE
+    // VWAP (room to fade).
+    const crossoverMarkers: SeriesMarker<Time>[] = [];
+    if (timeframe === "2min" && showCrossoverMarkers && indicators) {
+      const ema = indicators.find((s) => s.name === "ema9");
+      const rel = indicators.find((s) => s.name === "relatr");
+      if (
+        ema &&
+        rel &&
+        ema.points.length === bars.length &&
+        rel.points.length === bars.length
+      ) {
+        const THRESHOLD = 0.45;
+        const LOOKBACK = 5;
+        for (let i = 1; i < bars.length; i++) {
+          const closePrev = Number(bars[i - 1].close);
+          const closeCur = Number(bars[i].close);
+          const emaPrev = ema.points[i - 1].value;
+          const emaCur = ema.points[i].value;
+          if (
+            emaPrev == null ||
+            emaCur == null ||
+            !Number.isFinite(emaPrev) ||
+            !Number.isFinite(emaCur)
+          ) {
+            continue;
+          }
 
-    createSeriesMarkers(candles, markers);
-  }, [executions, bars, timeframe]);
+          // Strict crossover: previous bar on one side, current bar on the
+          // other. Equality on the previous bar counts as "from below /
+          // above" so a bar that touches EMA exactly still triggers.
+          const bullish = closePrev <= emaPrev && closeCur > emaCur;
+          const bearish = closePrev >= emaPrev && closeCur < emaCur;
+          if (!bullish && !bearish) continue;
+
+          // Last 5 bars ending at the crossover bar (inclusive). Did
+          // Relatr push past the threshold in the direction of the setup?
+          const startIdx = Math.max(0, i - LOOKBACK + 1);
+          let qualified = false;
+          for (let j = startIdx; j <= i; j++) {
+            const r = rel.points[j].value;
+            if (r == null || !Number.isFinite(r)) continue;
+            if (bullish && r > THRESHOLD) {
+              qualified = true;
+              break;
+            }
+            if (bearish && r < -THRESHOLD) {
+              qualified = true;
+              break;
+            }
+          }
+          if (!qualified) continue;
+
+          crossoverMarkers.push({
+            time: helsinkiWallSeconds(bars[i].time),
+            position: bullish ? "belowBar" : "aboveBar",
+            color: bullish ? "#16a34a" : "#f97316",
+            shape: bullish ? "arrowUp" : "arrowDown",
+            // No text — these are signal markers, not execution annotations.
+            // Distinguishable from BUY/SELL by colour (green/orange vs
+            // blue/red) and position (belowBar/aboveBar vs atPriceMiddle
+            // on the 2-min chart).
+          });
+        }
+      }
+    }
+
+    const allMarkers = [...markers, ...crossoverMarkers];
+    allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
+
+    // Reuse one markers plugin per chart lifetime. setMarkers([]) clears
+    // everything; setMarkers([...]) replaces. createSeriesMarkers is only
+    // called once because subsequent calls would create extra plugin
+    // instances and stack markers (toggle wouldn't actually remove them).
+    if (markersPluginRef.current) {
+      markersPluginRef.current.setMarkers(allMarkers);
+    } else {
+      markersPluginRef.current = createSeriesMarkers(candles, allMarkers);
+    }
+  }, [executions, bars, timeframe, indicators, showCrossoverMarkers]);
 
   return (
     <div

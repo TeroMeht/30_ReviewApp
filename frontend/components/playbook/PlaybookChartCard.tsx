@@ -280,8 +280,10 @@ export default function PlaybookChartCard({ trade, sectionLabel }: Props) {
             // Playbook view: only the execution markers and their text
             // labels should appear — strip the right-axis last-value
             // badges, the dashed last-close line, and indicator
-            // reference-level labels.
+            // reference-level labels. Also hide the EMA9 crossover
+            // signal triangles since they'd clutter the grid view.
             hideLastValueLabels
+            showCrossoverMarkers={false}
           />
         )}
       </div>

@@ -148,8 +148,8 @@ async def _fetch_one_timeframe(
     contract = _stock_contract(trade.symbol)
     end_dt = _window_end_for_trade(trade.date)
     logger.info(
-        "[bars %s/%s tradeid=%d] requesting: barSize=%s duration=%s end=%s",
-        trade.symbol, tf.label, trade.tradeid, tf.bar_size, tf.duration, end_dt,
+        "[bars %s/%s tradeid=%d] requesting: barSize=%s duration=%s end=%s useRTH=%s",
+        trade.symbol, tf.label, trade.tradeid, tf.bar_size, tf.duration, end_dt, tf.use_rth,
     )
 
     try:
@@ -160,7 +160,7 @@ async def _fetch_one_timeframe(
                 durationStr=tf.duration,
                 barSizeSetting=tf.bar_size,
                 whatToShow="TRADES",
-                useRTH=False,
+                useRTH=tf.use_rth,
                 formatDate=2,
             ),
             timeout=_IB_REQUEST_TIMEOUT_SEC,
