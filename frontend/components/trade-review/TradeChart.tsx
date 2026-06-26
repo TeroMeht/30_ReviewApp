@@ -121,7 +121,7 @@ export default function TradeChart({
   // so old markers would never be removed — which manifests as the
   // crossover toggle "doing nothing" once markers are first drawn.
   const markersPluginRef = useRef<ReturnType<
-    typeof createSeriesMarkers
+    typeof createSeriesMarkers<Time>
   > | null>(null);
   // Keyed by indicator.name. Track pane + kind alongside the series so
   // we can detect when an indicator switches pane/type and recreate it
