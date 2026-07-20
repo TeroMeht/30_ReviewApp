@@ -1,81 +1,29 @@
 "use client";
 
 /**
- * Analytics page — single shared control row at the top, every panel
- * below it consumes the same `weeks` / `group_by` values.
+ * Analytics page — weekly execution count chart only.
  *
- * Two user-controllable knobs:
- *   • weeks       — rolling window size (default 12)
- *   • group_by    — attribute P/L to intended_setup (actual, default)
- *                   or setup (planned). Only relevant for panels that
- *                   bucket by setup (weekly P/L chart, setup stats);
- *                   the scatter and plan-vs-actual panels ignore it.
- *
- * The page owns the controls + the weekly-P/L fetch lifecycle; each
- * child component owns its own fetch keyed on the props passed in.
+ * The page owns the shared `weeks` window control (default 12) and the
+ * weekly-execs fetch lifecycle. The other panels (weekly P/L, setup
+ * stats, plan-vs-actual) were removed for being visually noisy; the
+ * underlying components still exist if we want to reinstate them later.
  */
 
 import { useEffect, useState } from "react";
 import HeaderBox from "@/components/HeaderBox";
-import WeeklyPnlChart from "@/components/analytics/WeeklyPnlChart";
-import SetupStatsTable from "@/components/analytics/SetupStatsTable";
-import PlanVsActualTable from "@/components/analytics/PlanVsActualTable";
 import WeeklyExecsBarChart from "@/components/analytics/WeeklyExecsBarChart";
 import { API_PREFIX } from "@/lib/api_prefix";
-import type {
-  WeeklyExecsResponse,
-  WeeklyPnlResponse,
-} from "@/lib/types";
-
-type GroupBy = "intended_setup" | "setup";
+import type { WeeklyExecsResponse } from "@/lib/types";
 
 const WEEK_OPTIONS = [4, 8, 12, 26, 52] as const;
 
 export default function AnalyticsPage() {
   const [weeks, setWeeks] = useState<number>(12);
-  const [groupBy, setGroupBy] = useState<GroupBy>("intended_setup");
-  const [data, setData] = useState<WeeklyPnlResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
 
-  // Weekly executions bar chart lifecycle. Lives at the page level so
-  // it reacts to the shared `weeks` control without any plumbing. It
-  // ignores `groupBy` — the bar chart aggregates executions across
-  // every trade in the week regardless of setup.
+  // Weekly executions bar chart lifecycle.
   const [execs, setExecs] = useState<WeeklyExecsResponse | null>(null);
   const [execsLoading, setExecsLoading] = useState<boolean>(false);
   const [execsError, setExecsError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    (async () => {
-      try {
-        const url = `${API_PREFIX}/analytics/weekly-pnl?weeks=${weeks}&group_by=${groupBy}`;
-        const res = await fetch(url);
-        if (!res.ok) {
-          let detail = `HTTP ${res.status}`;
-          try {
-            const j = await res.json();
-            if (j?.detail) detail = String(j.detail);
-          } catch {
-            /* keep status */
-          }
-          throw new Error(detail);
-        }
-        const json: WeeklyPnlResponse = await res.json();
-        if (!cancelled) setData(json);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [weeks, groupBy]);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,16 +57,6 @@ export default function AnalyticsPage() {
     };
   }, [weeks]);
 
-  // Window-wide grand total — sum across every (week, setup) cell.
-  const grandTotal =
-    data?.weeks.reduce((acc, w) => {
-      for (const v of Object.values(w.by_setup)) {
-        const n = Number(v);
-        if (Number.isFinite(n)) acc += n;
-      }
-      return acc;
-    }, 0) ?? 0;
-
   return (
     <section className="home">
       <div className="home-content">
@@ -126,11 +64,11 @@ export default function AnalyticsPage() {
           <HeaderBox
             type="title"
             title="Analytics"
-            subtext="Weekly P/L attribution per setup."
+            subtext="Weekly execution activity."
           />
         </header>
 
-        {/* Controls row — shared by every panel below. */}
+        {/* Shared window control. */}
         <div
           style={{
             display: "flex",
@@ -156,90 +94,15 @@ export default function AnalyticsPage() {
               ))}
             </div>
           </ControlGroup>
-
-          <ControlGroup label="Attribute to">
-            <div style={{ display: "flex", gap: 4 }}>
-              <button
-                type="button"
-                onClick={() => setGroupBy("intended_setup")}
-                style={pill(groupBy === "intended_setup")}
-                aria-pressed={groupBy === "intended_setup"}
-                title="Group P/L by what was actually executed"
-              >
-                Actual
-              </button>
-              <button
-                type="button"
-                onClick={() => setGroupBy("setup")}
-                style={pill(groupBy === "setup")}
-                aria-pressed={groupBy === "setup"}
-                title="Group P/L by what was planned"
-              >
-                Planned
-              </button>
-            </div>
-          </ControlGroup>
-
-          <div
-            style={{
-              marginLeft: "auto",
-              fontSize: 12,
-              color: "#475569",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "flex-end",
-            }}
-          >
-            <span style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94a3b8" }}>
-              Window total
-            </span>
-            <span
-              style={{
-                fontSize: 16,
-                fontWeight: 700,
-                fontVariantNumeric: "tabular-nums",
-                color:
-                  grandTotal > 0 ? "#16a34a" : grandTotal < 0 ? "#b91c1c" : "#475569",
-              }}
-            >
-              {fmtMoney(grandTotal)}
-            </span>
-          </div>
         </div>
 
-        {/* Weekly P/L per setup. */}
+        {/* Weekly execution count. */}
         <div
           style={{
             border: "1px solid #e2e8f0",
             borderRadius: 8,
             background: "#fff",
             padding: 16,
-            overflowX: "auto",
-            overflowY: "visible",
-            minHeight: "600px",
-          }}
-        >
-          {error && (
-            <div style={{ color: "#b91c1c", fontSize: 12 }}>
-              Failed to load analytics: {error}
-            </div>
-          )}
-          {!error && loading && !data && (
-            <div style={{ color: "#94a3b8", fontSize: 12 }}>Loading…</div>
-          )}
-          {data && <WeeklyPnlChart data={data} />}
-        </div>
-
-        {/* Weekly executions trend. Consumes the shared `weeks` control
-            above. Ignores `groupBy` — execution counts are aggregated
-            across every trade in the week regardless of setup. */}
-        <div
-          style={{
-            border: "1px solid #e2e8f0",
-            borderRadius: 8,
-            background: "#fff",
-            padding: 16,
-            marginTop: 16,
           }}
         >
           <div
@@ -276,71 +139,6 @@ export default function AnalyticsPage() {
             <div style={{ color: "#94a3b8", fontSize: 12 }}>Loading…</div>
           )}
           {execs && <WeeklyExecsBarChart data={execs} />}
-        </div>
-
-        {/* Per-setup win/loss + hold-time stats. Driven by the shared
-            page-level weeks + groupBy controls. */}
-        <div
-          style={{
-            border: "1px solid #e2e8f0",
-            borderRadius: 8,
-            background: "#fff",
-            padding: 16,
-            marginTop: 16,
-          }}
-        >
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 700,
-              color: "#0f172a",
-              borderBottom: "1px solid #e2e8f0",
-              paddingBottom: 6,
-              marginBottom: 12,
-            }}
-          >
-            Setup stats — win/loss size and hold time
-          </div>
-          <SetupStatsTable weeks={weeks} groupBy={groupBy} />
-        </div>
-
-        {/* Plan-vs-actual deviations. Restricted to trades where both
-            planned and intended setups are labelled — see component for
-            why. Uses the shared `weeks` control; keeps its own
-            deviations-only toggle as a table-local concern. */}
-        <div
-          style={{
-            border: "1px solid #e2e8f0",
-            borderRadius: 8,
-            background: "#fff",
-            padding: 16,
-            marginTop: 16,
-          }}
-        >
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 700,
-              color: "#0f172a",
-              borderBottom: "1px solid #e2e8f0",
-              paddingBottom: 6,
-              marginBottom: 4,
-            }}
-          >
-            Plan vs. actual — what each deviation costs
-          </div>
-          <div
-            style={{
-              fontSize: 11,
-              color: "#64748b",
-              marginBottom: 12,
-            }}
-          >
-            Only includes trades where both the planned setup and the
-            executed (intended) setup are labelled. Sorted by total P/L
-            ascending — the costliest mappings are at the top.
-          </div>
-          <PlanVsActualTable weeks={weeks} />
         </div>
       </div>
     </section>
@@ -384,16 +182,4 @@ function pill(active: boolean): React.CSSProperties {
     fontWeight: active ? 600 : 400,
     fontFamily: "inherit",
   };
-}
-
-function fmtMoney(n: number): string {
-  const sign = n < 0 ? "−" : n > 0 ? "+" : "";
-  // Pin the locale so SSR (Node, often en-US) and the browser agree —
-  // `undefined` here pulled from the runtime default and caused a
-  // hydration mismatch in non-en-US browsers.
-  const abs = Math.abs(n).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return `${sign}$${abs}`;
 }

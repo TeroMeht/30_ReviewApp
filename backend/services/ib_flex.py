@@ -42,7 +42,7 @@ _UTC = ZoneInfo("UTC")
 import httpx
 
 from core.config import settings
-from helpers.example import normalize_symbol
+from helpers.example import normalize_symbol, is_currency_conversion
 from schemas.api_schemas import Execution
 
 logger = logging.getLogger(__name__)
@@ -58,12 +58,10 @@ _FLEX_DOWNLOAD = f"{_FLEX_BASE}/GetStatement"
 _DEFAULT_POLL_TIMEOUT_SEC = 60.0
 _POLL_INTERVAL_SEC = 2.0
 
-# Symbols we explicitly skip when parsing Flex Trade rows. These are
-# IB cash-FX conversion legs (the broker auto-converts to USD when the
-# account holds non-USD funds), not real trades — they don't belong in
-# the trade journal. Compared against the *normalised* symbol so case
-# variants from IB are caught too.
-_SKIP_SYMBOLS = frozenset({"EUR.USD", "USD.EUR"})
+# Currency-conversion legs are matched generically via
+# helpers.example.is_currency_conversion (any XXX.YYY pair), not a
+# hard-coded list — the broker auto-converts between any pair of held
+# currencies, so EUR.USD is just the pair we see most often.
 
 
 
@@ -189,10 +187,12 @@ def parse_flex_executions(xml_body: str) -> list[Execution]:
         # canonical form (matches what would be stored in executions.symbol).
         symbol = normalize_symbol(_row_get(trade_elem, "symbol") or "")
 
-        # Drop EUR.USD / USD.EUR currency-conversion legs — they aren't
-        # trades, they're the broker auto-converting cash balances and
-        # would pollute the journal.
-        if symbol in _SKIP_SYMBOLS:
+        # Drop any XXX.YYY currency-conversion leg — these aren't trades,
+        # they're the broker auto-converting cash balances and would
+        # pollute the journal. The DB-side filter in
+        # db.trades.sync_trades_from_executions is the backstop for FX
+        # rows that were inserted before this parser-side check existed.
+        if is_currency_conversion(symbol):
             skipped_fx += 1
             continue
 

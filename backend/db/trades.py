@@ -17,7 +17,7 @@ import asyncpg
 from datetime import datetime, time
 from typing import Optional
 from zoneinfo import ZoneInfo
-from helpers.example import normalize_symbol
+from helpers.example import normalize_symbol, CURRENCY_PAIR_SQL_RE
 from schemas.api_schemas import (
     Trade,
     TradeCreate,
@@ -347,12 +347,22 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
         # Step 1: insert missing (symbol, local-day) trades from unlinked
         # executions. ON CONFLICT DO NOTHING relies on
         # trades_symbol_localday_uniq so re-running is safe.
+        #
+        # Currency-conversion legs (EUR.USD, USD.EUR, and any other
+        # XXX.YYY IB cash-FX pair) are excluded here so a user who deletes
+        # an FX row from the trades table does not have Generate Trades
+        # recreate it from stale executions rows. Newer Flex fetches drop
+        # these at parse time (see services/ib_flex.parse_flex_executions),
+        # but rows inserted before that filter existed can still be sitting
+        # in the executions table with trade_fk NULL — the SQL filter here
+        # is what makes deletion permanent.
         created_rows = await db_conn.fetch(
             f"""
             INSERT INTO trades (symbol, date)
             SELECT symbol, MIN(datetime)
             FROM executions
             WHERE trade_fk IS NULL
+              AND symbol !~ '{CURRENCY_PAIR_SQL_RE}'
             GROUP BY symbol, (datetime AT TIME ZONE '{LOCAL_TZ}')::date
             ON CONFLICT (symbol, ((date AT TIME ZONE '{LOCAL_TZ}')::date)) DO NOTHING
             RETURNING
@@ -365,12 +375,16 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
         trades_created = len(trades_created_ids)
 
         # Step 2: link unlinked executions to trades by (symbol, local-day).
+        # Skip currency-conversion executions for the same reason as above —
+        # we never want a EUR.USD execution to become linked to (and thus
+        # resurrect) an FX trade.
         link_status = await db_conn.execute(
             f"""
             UPDATE executions e
             SET trade_fk = t.tradeid
             FROM trades t
             WHERE e.trade_fk IS NULL
+              AND e.symbol !~ '{CURRENCY_PAIR_SQL_RE}'
               AND e.symbol = t.symbol
               AND (e.datetime AT TIME ZONE '{LOCAL_TZ}')::date
                   = (t.date     AT TIME ZONE '{LOCAL_TZ}')::date
