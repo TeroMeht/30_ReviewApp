@@ -15,10 +15,11 @@ from ib_async import IB
 from core.config import settings
 
 # Routers — add new ones here as the app grows.
-from routers import analytics, executions, playbook, reviews, trades
+from routers import analytics, executions, order_categories, playbook, reviews, trades
 
 # Schema setup helpers
 from db.executions import create_executions_table
+from db.order_categories import create_order_categories_table
 from db.trades import create_trades_table
 from db.trade_bars import create_trade_bars_tables
 from db.playbook import create_playbook_table
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI):
         async with db_pool.acquire() as conn:
             await create_trades_table(conn)
             await create_executions_table(conn)
+            await create_order_categories_table(conn)
             await create_trade_bars_tables(conn)
             await create_playbook_table(conn)
             await create_weekly_reviews_table(conn)
@@ -104,6 +106,7 @@ app.include_router(trades.router)
 app.include_router(analytics.router)
 app.include_router(playbook.router)
 app.include_router(reviews.router)
+app.include_router(order_categories.router)
 
 
 if __name__ == "__main__":

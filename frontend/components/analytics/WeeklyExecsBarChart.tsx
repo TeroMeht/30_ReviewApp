@@ -25,7 +25,9 @@
  */
 
 import * as React from "react";
+import { useRef } from "react";
 import type { WeeklyExecsResponse } from "@/lib/types";
+import { useContainerWidth } from "@/lib/useContainerWidth";
 
 const COLOR_BAR = "#2563eb";
 const COLOR_BAR_HOVER = "#1d4ed8";
@@ -36,7 +38,9 @@ const COLOR_SCRATCH = "#64748b";
 
 interface Props {
   data: WeeklyExecsResponse;
-  /** Total chart width in px. */
+  /** Fallback width (px) used until the container is measured. The
+   *  rendered chart width is always the container width, so this
+   *  prop just affects the first paint. */
   width?: number;
   /** Plot height in px. */
   height?: number;
@@ -114,14 +118,23 @@ function niceStep(roughStep: number): number {
 
 export default function WeeklyExecsBarChart({
   data,
-  width = 960,
+  width: fallbackWidth = 960,
   height = 360,
 }: Props) {
+  // Track the actual container width so the chart grows/shrinks with
+  // the page. Prevents the "zoomed out" look when many weeks are
+  // displayed inside a wider card than the old 960 default.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const width = useContainerWidth(containerRef, fallbackWidth);
+
   const weeks = data.weeks;
 
   if (weeks.length === 0) {
     return (
-      <div style={{ color: "#94a3b8", fontSize: 12 }}>
+      <div
+        ref={containerRef}
+        style={{ width: "100%", color: "#94a3b8", fontSize: 12 }}
+      >
         No weeks in window.
       </div>
     );
@@ -174,7 +187,7 @@ export default function WeeklyExecsBarChart({
   const totalPnl = weeks.reduce((a, w) => a + parsePnl(w.total_pnl), 0);
 
   return (
-    <div style={{ width }}>
+    <div ref={containerRef} style={{ width: "100%" }}>
       {/* Compact text summary above the chart — mirrors the other
           analytics charts and keeps the user oriented. */}
       <div

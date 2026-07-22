@@ -260,9 +260,35 @@ export default function DailyTradesTable({
                       textAlign: "center",
                       fontVariantNumeric: "tabular-nums",
                       color: (t.execution_count ?? 0) === 0 ? "#94a3b8" : "#0f172a",
+                      whiteSpace: "nowrap",
                     }}
+                    title={
+                      (t.uncategorized_count ?? 0) > 0
+                        ? `${t.uncategorized_count} of ${t.execution_count} orders still uncategorised`
+                        : undefined
+                    }
                   >
                     {t.execution_count ?? "—"}
+                    {(t.uncategorized_count ?? 0) > 0 && (
+                      <span
+                        style={{
+                          marginLeft: 4,
+                          display: "inline-block",
+                          padding: "0 4px",
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: "#c2410c",
+                          background: "rgba(249,115,22,0.15)",
+                          border: "1px solid rgba(249,115,22,0.35)",
+                          borderRadius: 6,
+                          lineHeight: "14px",
+                          verticalAlign: "middle",
+                        }}
+                        aria-label={`${t.uncategorized_count} orders uncategorised`}
+                      >
+                        !{t.uncategorized_count}
+                      </span>
+                    )}
                   </td>
                   <td
                     style={{

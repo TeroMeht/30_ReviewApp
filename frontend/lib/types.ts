@@ -26,6 +26,30 @@ export interface CategoryUpdate {
   updated: boolean;
 }
 
+// ─── Order-level trade-review categories ────────────────────────────────────
+// One row per IB order (iborderid). Categories are 1..4:
+//   1 = Followed plan, made money
+//   2 = Followed plan, stopped out at predefined stop
+//   3 = Off-plan (FOMO / revenge), lost money
+//   4 = Off-plan, made money in the end
+// Missing row = uncategorised.
+
+export type OrderCategoryValue = 1 | 2 | 3 | 4;
+
+export interface OrderCategory {
+  iborderid: string;
+  trade_fk: number;
+  category: OrderCategoryValue;
+  /** ISO 8601 timestamp string; may be null if the server didn't populate it. */
+  updated_at: string | null;
+}
+
+/** Body for PUT /api/order-categories/{iborderid}. */
+export interface OrderCategoryUpsert {
+  trade_fk: number;
+  category: OrderCategoryValue;
+}
+
 // ─── Trades ──────────────────────────────────────────────────────────────────
 
 export interface Trade {
@@ -55,6 +79,12 @@ export interface Trade {
    *  /trades/{id}/day endpoint; null on every other read and on
    *  trades with no executions linked yet. */
   realized_pnl?: string | null;
+  /** How many of this trade's distinct ibOrderIDs still lack a
+   *  trade-review category. Populated by /trades/{id}/day and
+   *  /trades/{id}/week only; null on every other read. When > 0 the
+   *  daily/weekly tables show an "uncategorised" dot next to the Execs
+   *  cell so the user is nudged to finish labelling. */
+  uncategorized_count?: number | null;
 }
 
 /** Body for POST /api/trades */
@@ -373,6 +403,35 @@ export interface WeeklyExecsBucket {
 export interface WeeklyExecsResponse {
   window_weeks: number;
   weeks: WeeklyExecsBucket[];
+}
+
+/** One Mon..Sun (Helsinki) week's per-category order count. Counts
+ *  every distinct IB order in the week, split by trade-review
+ *  category; `uncategorized` picks up orders with no row in
+ *  `order_categories` yet. By construction
+ *    cat1 + cat2 + cat3 + cat4 + uncategorized
+ *    == exec_count for the same week in /weekly-execs.
+ *  Categories match the taxonomy in ExecutionsTable:
+ *    cat1 — Followed plan, made money
+ *    cat2 — Followed plan, stopped at plan stop
+ *    cat3 — Off-plan (FOMO/revenge), lost money
+ *    cat4 — Off-plan, made money in the end. */
+export interface WeeklyOrderCategoriesBucket {
+  /** YYYY-MM-DD — Monday in Europe/Helsinki. */
+  week_start: string;
+  cat1: number;
+  cat2: number;
+  cat3: number;
+  cat4: number;
+  uncategorized: number;
+}
+
+/** Response for GET /api/analytics/weekly-order-categories. Shares
+ *  its window arithmetic with /weekly-execs so the two charts always
+ *  align on the x-axis when called with the same `weeks` value. */
+export interface WeeklyOrderCategoriesResponse {
+  window_weeks: number;
+  weeks: WeeklyOrderCategoriesBucket[];
 }
 
 /** One row of GET /api/playbook/setups — a setup label with aggregate

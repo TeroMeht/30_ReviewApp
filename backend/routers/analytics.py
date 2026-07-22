@@ -44,6 +44,8 @@ from schemas.api_schemas import (
     SetupStatsRow,
     WeeklyExecsBucket,
     WeeklyExecsResponse,
+    WeeklyOrderCategoriesBucket,
+    WeeklyOrderCategoriesResponse,
     WeeklyPnlBucket,
     WeeklyPnlResponse,
 )
@@ -536,6 +538,109 @@ async def get_weekly_execs(
     )
 
     return WeeklyExecsResponse(
+        window_weeks=weeks,
+        weeks=[bucket_by_start[ws] for ws in all_week_starts],
+    )
+
+
+@router.get(
+    "/weekly-order-categories",
+    response_model=WeeklyOrderCategoriesResponse,
+)
+async def get_weekly_order_categories(
+    weeks: int = Query(
+        12, ge=1, le=104,
+        description="Number of Mon..Sun weeks to include, ending on the current Helsinki week.",
+    ),
+    db_conn=Depends(get_db_conn),
+) -> WeeklyOrderCategoriesResponse:
+    """Per-week count of distinct orders, split by trade-review category.
+
+    Powers the analytics-page discipline chart — how many orders per
+    week were "followed plan" (1, 2), "off-plan" (3, 4) or still
+    uncategorised. Every distinct IB order (iborderid) with a parent
+    trade in the window contributes exactly once; a LEFT JOIN against
+    ``order_categories`` labels each order with its user-assigned
+    category or NULL. By construction
+        cat1 + cat2 + cat3 + cat4 + uncategorized
+        == exec_count for the same week in /weekly-execs.
+
+    Buckets are anchored on the parent trade's Helsinki-local Monday, so
+    an order carried out on Sunday and its follow-up on Monday would
+    fall in adjacent weeks — matching how every other analytics
+    endpoint here buckets.
+
+    The response always contains exactly ``weeks`` buckets in
+    chronological order so the chart renders a stable x-axis even on
+    empty weeks. Window arithmetic mirrors /weekly-execs so the two
+    charts share the same x-axis when called with the same ``weeks``.
+    """
+    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    this_monday = today_local - timedelta(days=today_local.weekday())
+    start_monday = this_monday - timedelta(weeks=weeks - 1)
+    all_week_starts: list[date] = [
+        start_monday + timedelta(weeks=i) for i in range(weeks)
+    ]
+
+    # Start from distinct (week, iborderid) pairs so every IB order is
+    # counted once (regardless of fill count), then LEFT JOIN
+    # order_categories so uncategorised orders come through with
+    # oc.category = NULL. FILTER folds all five buckets into one pass;
+    # by construction their sum equals COUNT(DISTINCT iborderid) per
+    # week — i.e. the exec_count that /weekly-execs surfaces.
+    sql = f"""
+        WITH order_rows AS (
+            SELECT DISTINCT
+                (date_trunc(
+                    'week',
+                    ((t.date AT TIME ZONE '{LOCAL_TZ}')::date)::timestamp
+                ))::date AS week_start,
+                e.iborderid
+            FROM executions e
+            JOIN trades t ON t.tradeid = e.trade_fk
+            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+              AND e.iborderid IS NOT NULL
+        )
+        SELECT
+            r.week_start,
+            COUNT(*) FILTER (WHERE oc.category = 1)::int         AS cat1,
+            COUNT(*) FILTER (WHERE oc.category = 2)::int         AS cat2,
+            COUNT(*) FILTER (WHERE oc.category = 3)::int         AS cat3,
+            COUNT(*) FILTER (WHERE oc.category = 4)::int         AS cat4,
+            COUNT(*) FILTER (WHERE oc.category IS NULL)::int     AS uncategorized
+        FROM order_rows r
+        LEFT JOIN order_categories oc ON oc.iborderid = r.iborderid
+        GROUP BY r.week_start
+        ORDER BY r.week_start ASC
+    """
+    rows = await db_conn.fetch(sql, start_monday)
+
+    # Prefill empty weeks so the chart has a stable x-axis.
+    bucket_by_start: dict[date, WeeklyOrderCategoriesBucket] = {
+        ws: WeeklyOrderCategoriesBucket(week_start=ws) for ws in all_week_starts
+    }
+    for r in rows:
+        ws: date = r["week_start"]
+        if ws in bucket_by_start:
+            bucket_by_start[ws] = WeeklyOrderCategoriesBucket(
+                week_start=ws,
+                cat1=int(r["cat1"]),
+                cat2=int(r["cat2"]),
+                cat3=int(r["cat3"]),
+                cat4=int(r["cat4"]),
+                uncategorized=int(r["uncategorized"]),
+            )
+
+    logger.info(
+        "weekly-order-categories computed | weeks=%d non-empty=%d",
+        weeks,
+        sum(
+            1 for b in bucket_by_start.values()
+            if (b.cat1 + b.cat2 + b.cat3 + b.cat4 + b.uncategorized) > 0
+        ),
+    )
+
+    return WeeklyOrderCategoriesResponse(
         window_weeks=weeks,
         weeks=[bucket_by_start[ws] for ws in all_week_starts],
     )

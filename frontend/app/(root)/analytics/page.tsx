@@ -1,19 +1,27 @@
 "use client";
 
 /**
- * Analytics page — weekly execution count chart only.
+ * Analytics page — weekly execution count + weekly order-category
+ * discipline chart.
  *
- * The page owns the shared `weeks` window control (default 12) and the
- * weekly-execs fetch lifecycle. The other panels (weekly P/L, setup
- * stats, plan-vs-actual) were removed for being visually noisy; the
+ * The page owns the shared `weeks` window control (default 12) and
+ * kicks off one fetch per chart against that value. Both endpoints
+ * (/weekly-execs and /weekly-order-categories) use identical Monday-
+ * anchored window arithmetic, so the two charts always line up on
+ * the same x-axis. Other panels (weekly P/L, setup stats,
+ * plan-vs-actual) were removed for being visually noisy; the
  * underlying components still exist if we want to reinstate them later.
  */
 
 import { useEffect, useState } from "react";
 import HeaderBox from "@/components/HeaderBox";
+import WeeklyCategoriesBarChart from "@/components/analytics/WeeklyCategoriesBarChart";
 import WeeklyExecsBarChart from "@/components/analytics/WeeklyExecsBarChart";
 import { API_PREFIX } from "@/lib/api_prefix";
-import type { WeeklyExecsResponse } from "@/lib/types";
+import type {
+  WeeklyExecsResponse,
+  WeeklyOrderCategoriesResponse,
+} from "@/lib/types";
 
 const WEEK_OPTIONS = [4, 8, 12, 26, 52] as const;
 
@@ -24,6 +32,12 @@ export default function AnalyticsPage() {
   const [execs, setExecs] = useState<WeeklyExecsResponse | null>(null);
   const [execsLoading, setExecsLoading] = useState<boolean>(false);
   const [execsError, setExecsError] = useState<string | null>(null);
+
+  // Weekly order-category (discipline) chart lifecycle. Same shape as
+  // the execs one so the two can share loading/error UI patterns.
+  const [cats, setCats] = useState<WeeklyOrderCategoriesResponse | null>(null);
+  const [catsLoading, setCatsLoading] = useState<boolean>(false);
+  const [catsError, setCatsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +71,38 @@ export default function AnalyticsPage() {
     };
   }, [weeks]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setCatsLoading(true);
+    setCatsError(null);
+    (async () => {
+      try {
+        const url = `${API_PREFIX}/analytics/weekly-order-categories?weeks=${weeks}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const j = await res.json();
+            if (j?.detail) detail = String(j.detail);
+          } catch {
+            /* keep status */
+          }
+          throw new Error(detail);
+        }
+        const json: WeeklyOrderCategoriesResponse = await res.json();
+        if (!cancelled) setCats(json);
+      } catch (e) {
+        if (!cancelled)
+          setCatsError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setCatsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [weeks]);
+
   return (
     <section className="home">
       <div className="home-content">
@@ -64,7 +110,7 @@ export default function AnalyticsPage() {
           <HeaderBox
             type="title"
             title="Analytics"
-            subtext="Weekly execution activity."
+            subtext="Weekly execution activity and category discipline."
           />
         </header>
 
@@ -139,6 +185,54 @@ export default function AnalyticsPage() {
             <div style={{ color: "#94a3b8", fontSize: 12 }}>Loading…</div>
           )}
           {execs && <WeeklyExecsBarChart data={execs} />}
+        </div>
+
+        {/* Weekly order-category discipline breakdown. Same window as
+            the chart above; stacked bar shows Cat 1..4 counts per week. */}
+        <div
+          style={{
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+            background: "#fff",
+            padding: 16,
+            marginTop: 16,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: "#0f172a",
+              borderBottom: "1px solid #e2e8f0",
+              paddingBottom: 6,
+              marginBottom: 4,
+            }}
+          >
+            Weekly executions by category
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: "#64748b",
+              marginBottom: 12,
+            }}
+          >
+            One cluster of five mini-bars per Mon..Sun week — categories
+            1..4 plus an uncategorised bucket. The five per week always
+            sum to the same value as the chart above (total distinct IB
+            orders), so this is the discipline breakdown of that same
+            volume. Assign categories in the Trade Review executions
+            table.
+          </div>
+          {catsError && (
+            <div style={{ color: "#b91c1c", fontSize: 12 }}>
+              Failed to load weekly categories: {catsError}
+            </div>
+          )}
+          {!catsError && catsLoading && !cats && (
+            <div style={{ color: "#94a3b8", fontSize: 12 }}>Loading…</div>
+          )}
+          {cats && <WeeklyCategoriesBarChart data={cats} />}
         </div>
       </div>
     </section>

@@ -173,7 +173,7 @@ function TradeReviewPageInner() {
           </div>
           <div style={panel}>
             <div style={panelHdr}>Executions ({executions.length})</div>
-            <ExecutionsTable executions={executions} />
+            <ExecutionsTable executions={executions} tradeid={trade.tradeid} />
           </div>
         </aside>
       </div>

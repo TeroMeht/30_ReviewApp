@@ -29,6 +29,32 @@ class CategoryUpdate(BaseModel):
     updated: bool
 
 
+# ─── Order-level trade-review categories ─────────────────────────────────────
+#
+# One row per IB order (iborderid). Categories:
+#   1 — Followed plan, made money.
+#   2 — Followed plan, stopped out at predefined stop.
+#   3 — Off-plan (FOMO / revenge), lost money.
+#   4 — Off-plan, made money in the end.
+# Absence of a row = uncategorised (the UI treats missing as "no pick").
+
+class OrderCategory(BaseModel):
+    """One (iborderid → category) assignment stored in order_categories."""
+    iborderid: str
+    trade_fk: int
+    category: int = Field(ge=1, le=4)
+    updated_at: Optional[datetime] = None
+
+
+class OrderCategoryUpsert(BaseModel):
+    """Body for PUT /api/order-categories/{iborderid}. ``trade_fk`` is
+    required so the row is anchored to a trade even on first insert
+    (there is no way for the backend to infer it from iborderid alone —
+    executions may not have been linked yet)."""
+    trade_fk: int
+    category: int = Field(ge=1, le=4)
+
+
 # ─── Trade Models ─────────────────────────────────────────────────────────────
 
 class Trade(BaseModel):
@@ -72,6 +98,11 @@ class Trade(BaseModel):
     notes: Optional[str] = None
     execution_count: Optional[int] = None
     realized_pnl: Optional[Decimal] = None
+    # Opt-in like execution_count: populated by /trades/{id}/day and
+    # /trades/{id}/week so the tables can flag trades that still have
+    # uncategorised orders (distinct iborderids with no matching
+    # order_categories row). None on every other read.
+    uncategorized_count: Optional[int] = None
 
 
 class TradeCreate(BaseModel):
@@ -412,6 +443,45 @@ class WeeklyExecsResponse(BaseModel):
     used."""
     window_weeks: int
     weeks: list[WeeklyExecsBucket]
+
+
+class WeeklyOrderCategoriesBucket(BaseModel):
+    """One Mon..Sun (Helsinki) week's per-category order count.
+
+    Counts are the number of distinct IB orders (iborderids) whose
+    parent trade fell in the given week, split by trade-review
+    category. ``uncategorized`` picks up every order that has no row in
+    ``order_categories`` yet, so
+        cat1 + cat2 + cat3 + cat4 + uncategorized
+        == exec_count for the same week in /weekly-execs.
+    That equality is what lets the chart double as a discipline view
+    over the total order volume.
+
+    Category taxonomy (matches db/order_categories.py):
+      * cat1 — Followed plan, made money.
+      * cat2 — Followed plan, stopped out at predefined stop.
+      * cat3 — Off-plan (FOMO / revenge), lost money.
+      * cat4 — Off-plan, made money in the end.
+
+    Empty weeks (no orders at all) are still returned with zeros so
+    the chart x-axis stays stable.
+    """
+    week_start: date
+    cat1: int = 0
+    cat2: int = 0
+    cat3: int = 0
+    cat4: int = 0
+    uncategorized: int = 0
+
+
+class WeeklyOrderCategoriesResponse(BaseModel):
+    """Response for GET /api/analytics/weekly-order-categories. ``weeks`` is
+    contiguous over the requested window (every Mon..Sun bucket is
+    present, even empty ones). ``window_weeks`` echoes the window size
+    used — the endpoint uses the same window arithmetic as
+    /weekly-execs so the two charts always share an x-axis."""
+    window_weeks: int
+    weeks: list[WeeklyOrderCategoriesBucket]
 
 
 # ─── Playbook ─────────────────────────────────────────────────────────────────
