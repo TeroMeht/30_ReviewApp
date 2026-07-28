@@ -9,6 +9,7 @@ from schemas.api_schemas import (
     Trade,
     TradeCreate,
     TradeUpdate,
+    TradeMfeConfig,
     TradeSyncRequest,
     TradeSyncResult,
     BarFetchBatchResult,
@@ -38,10 +39,45 @@ from services.ib_bars import (
     get_last_error,
 )
 from services.chart_indicators import build_indicators
+from services.mfe import compute_mfe
 
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+async def _attach_potential_pnl(db_conn, trades: list[Trade]) -> None:
+    """Populate `trade.potential_pnl` (in place) for every trade in
+    `trades` that has a saved MFE config. Trades without a config keep
+    `potential_pnl = None`.
+
+    One SELECT to pull every relevant `trade_mfe` row, then a compute
+    per trade. compute_mfe itself issues its own bar/execution queries,
+    so this is N+O(1) round-trips for N trades with configs — fine at
+    daily/weekly scale (<= a few dozen). If this ever becomes a hot
+    path we can batch the bar reads too.
+    """
+    if not trades:
+        return
+    tradeids = [t.tradeid for t in trades]
+    config_rows = await db_conn.fetch(
+        """
+        SELECT trade_fk, entry_iborderid, initial_stop_price,
+               stop_iborderid, updated_at
+        FROM trade_mfe
+        WHERE trade_fk = ANY($1::int[])
+        """,
+        tradeids,
+    )
+    if not config_rows:
+        return
+    configs = {int(r["trade_fk"]): TradeMfeConfig(**dict(r)) for r in config_rows}
+    for t in trades:
+        cfg = configs.get(t.tradeid)
+        if cfg is None:
+            continue
+        result = await compute_mfe(db_conn, t.tradeid, cfg)
+        t.potential_pnl = result.potential_pnl
 
 router = APIRouter(
     prefix="/api/trades",
@@ -487,7 +523,9 @@ async def get_trades_in_week(
         tradeid,
         offset,
     )
-    return [Trade(**dict(r)) for r in rows]
+    trades = [Trade(**dict(r)) for r in rows]
+    await _attach_potential_pnl(db_conn, trades)
+    return trades
 
 @router.get("/{tradeid}/day", response_model=list[Trade])
 async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
@@ -551,5 +589,7 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
         """,
         tradeid,
     )
-    return [Trade(**dict(r)) for r in rows]
+    trades = [Trade(**dict(r)) for r in rows]
+    await _attach_potential_pnl(db_conn, trades)
+    return trades
 

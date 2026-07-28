@@ -327,6 +327,14 @@ function WeekBody({
     .filter((n): n is number => n !== null);
   const tradesWithPnl = pnls.length;
   const totalPnl = pnls.reduce((acc, n) => acc + n, 0);
+  // Sum of per-trade MFE potential PnL. Only trades that have a saved
+  // MFE config produce a non-null value; the rest are skipped so a
+  // partial coverage doesn't zero out the aggregate.
+  const potentials = trades
+    .map((t) => parsePnl(t.potential_pnl))
+    .filter((n): n is number => n !== null);
+  const tradesWithPotential = potentials.length;
+  const totalPotential = potentials.reduce((acc, n) => acc + n, 0);
   const totalExecs = trades.reduce(
     (acc, t) => acc + (t.execution_count ?? 0),
     0
@@ -358,6 +366,26 @@ function WeekBody({
             </span>
           </span>
         )}
+        {tradesWithPotential > 0 && (
+          <span
+            title={
+              tradesWithPotential !== totalTrades
+                ? `${tradesWithPotential} of ${totalTrades} trade${totalTrades === 1 ? "" : "s"} have an MFE config`
+                : undefined
+            }
+          >
+            Week potential:{" "}
+            <span style={{ color: pnlColor(totalPotential), fontWeight: 700 }}>
+              {fmtPnl(totalPotential)}
+            </span>
+            {tradesWithPotential !== totalTrades && (
+              <span style={{ color: "#94a3b8", fontWeight: 400 }}>
+                {" "}
+                ({tradesWithPotential}/{totalTrades})
+              </span>
+            )}
+          </span>
+        )}
         <span>
           Total execs:{" "}
           <span style={{ color: "#0f172a", fontWeight: 600 }}>
@@ -382,6 +410,12 @@ function WeekBody({
               <th style={{ ...th, textAlign: "center" }}>PP</th>
               <th style={{ ...th, textAlign: "center" }}>Execs</th>
               <th style={{ ...th, textAlign: "right" }}>P/L</th>
+              <th
+                style={{ ...th, textAlign: "right" }}
+                title="MFE-based potential PnL. Requires a saved MFE config on the trade."
+              >
+                Potential
+              </th>
               <th style={th}>Notes</th>
             </tr>
           </thead>
@@ -389,6 +423,7 @@ function WeekBody({
             {trades.map((t) => {
               const isCurrent = t.tradeid === currentTradeId;
               const pnl = parsePnl(t.realized_pnl);
+              const potential = parsePnl(t.potential_pnl);
               // Highlight deviations (planned ≠ actual). Only flag when
               // both columns are filled in to avoid lighting up rows that
               // are simply unlabelled.
@@ -507,6 +542,22 @@ function WeekBody({
                   <td
                     style={{
                       ...td,
+                      textAlign: "right",
+                      fontVariantNumeric: "tabular-nums",
+                      color: pnlColor(potential),
+                      fontWeight: potential !== null ? 600 : 400,
+                    }}
+                    title={
+                      potential === null
+                        ? "No MFE config saved for this trade"
+                        : undefined
+                    }
+                  >
+                    {potential === null ? "—" : fmtPnl(potential)}
+                  </td>
+                  <td
+                    style={{
+                      ...td,
                       color: "#475569",
                       maxWidth: 320,
                       overflow: "hidden",
@@ -560,6 +611,24 @@ function WeekBody({
                   }}
                 >
                   {fmtPnl(totalPnl)}
+                </td>
+                <td
+                  style={{
+                    ...td,
+                    textAlign: "right",
+                    fontVariantNumeric: "tabular-nums",
+                    color: tradesWithPotential > 0 ? pnlColor(totalPotential) : "#94a3b8",
+                    fontWeight: 700,
+                  }}
+                  title={
+                    tradesWithPotential === 0
+                      ? "No trades in this week have an MFE config saved"
+                      : tradesWithPotential !== totalTrades
+                      ? `${tradesWithPotential} of ${totalTrades} trades have an MFE config`
+                      : undefined
+                  }
+                >
+                  {tradesWithPotential > 0 ? fmtPnl(totalPotential) : "—"}
                 </td>
                 <td style={td} />
               </tr>

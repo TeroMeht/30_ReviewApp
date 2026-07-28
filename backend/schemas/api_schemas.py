@@ -103,6 +103,13 @@ class Trade(BaseModel):
     # uncategorised orders (distinct iborderids with no matching
     # order_categories row). None on every other read.
     uncategorized_count: Optional[int] = None
+    # Opt-in: populated by /trades/{id}/day and /trades/{id}/week when a
+    # trade has a saved MFE config and 2-min bars available. Represents
+    # the hypothetical PnL if the trade had been exited at the MFE peak
+    # (capped at realized_pnl when a stop-run happened before the peak).
+    # None when the trade has no MFE config saved, has no bars, or has
+    # no executions. See services/mfe.py for the compute logic.
+    potential_pnl: Optional[Decimal] = None
 
 
 class TradeCreate(BaseModel):
@@ -556,6 +563,106 @@ class PlaybookNotesUpdate(BaseModel):
     exit_rules: Optional[str] = None
     common_mistakes: Optional[str] = None
     examples: Optional[str] = None
+
+
+# ─── Trade MFE (Maximum Favorable Excursion) ─────────────────────────────────
+#
+# One row per trade in `trade_mfe`. Stores the user-picked entry order and the
+# initial stop level so we can compute:
+#   * MFE price     — max favorable bar extreme from entry_time to end of the
+#                     US RTH session on the entry's trading day. For a long
+#                     entry (BUY) that's max(bar.high); for a short entry
+#                     (SELL) it's min(bar.low).
+#   * Potential PnL — (mfe_price - entry_price) * qty for longs,
+#                     (entry_price - mfe_price) * qty for shorts,
+#                     where qty is the picked entry order's total shares.
+#   * Stopped-out flag — chronological check on 2-min bars from entry
+#                     forward: if any bar.low <= stop (long) or bar.high >=
+#                     stop (short) occurs BEFORE the MFE peak bar, we treat
+#                     the trade as having been stopped out. In that case
+#                     potential_pnl is set to actual_pnl (no favorable run
+#                     was realistically capturable).
+#
+# The user pinpoints one execution order (iborderid) as the entry — the
+# executions table typically has multiple orders (scaling in / out), so we
+# don't try to guess. `initial_stop_price` is user-supplied because the
+# realized stop-loss order price may reflect a mid-trade adjustment.
+
+
+class TradeMfeConfig(BaseModel):
+    """Stored MFE configuration for one trade — the user-provided inputs.
+
+    ``entry_iborderid`` references one row in the trade's ExecutionsTable
+    (grouped by iborderid). ``initial_stop_price`` is the price level the
+    user planned to stop out at before any mid-trade adjustments.
+
+    ``stop_iborderid`` is optional metadata: when the user picked an
+    executed order as the source of the stop level (e.g. the actual
+    stop order that filled, when it wasn't moved), we store its id so
+    the UI can restore the "picked from execution" state on reload.
+    NULL means the price was typed in manually.
+    """
+    trade_fk: int
+    entry_iborderid: str
+    initial_stop_price: Decimal
+    stop_iborderid: Optional[str] = None
+    updated_at: Optional[datetime] = None
+
+
+class TradeMfeUpsert(BaseModel):
+    """Body for PUT /api/trades/{tradeid}/mfe.
+
+    ``entry_iborderid`` is always required. The stop can be provided as
+    EITHER a manual price OR a picked execution order (the backend
+    resolves the picked order to its qty-weighted avg fill price).
+    Exactly one of ``initial_stop_price`` / ``stop_iborderid`` must be
+    supplied — the router validates this and returns 400 otherwise.
+    """
+    entry_iborderid: str
+    initial_stop_price: Optional[Decimal] = None
+    stop_iborderid: Optional[str] = None
+
+
+class TradeMfeResult(BaseModel):
+    """Response for GET/PUT /api/trades/{tradeid}/mfe.
+
+    ``config`` is the stored inputs (None until the user saves the first
+    time). All ``computed_*`` fields are None when either config or the
+    2-min bar data isn't available yet.
+
+    ``direction`` is 'long' or 'short', derived from the picked entry
+    order's buySell side. ``entry_price`` is the qty-weighted average
+    fill price for the picked order. ``entry_qty`` is the total shares
+    of the picked order (absolute value; sign is captured by
+    ``direction``).
+
+    ``mfe_price`` / ``mfe_time`` describe the bar extreme that defined
+    the peak. ``potential_pnl`` is the hypothetical result of exiting
+    at the MFE peak on the picked entry's shares. ``stopped_out`` is
+    True when a 2-min bar between entry and the MFE bar touched the
+    initial stop — in that case ``potential_pnl`` is capped at
+    ``actual_pnl`` and ``stopped_out_time`` marks when the stop was
+    first tagged.
+
+    ``actual_pnl`` is the trade's cumulative realized P/L across all
+    executions (same figure the daily/weekly tables show).
+    """
+    trade_fk: int
+    config: Optional[TradeMfeConfig] = None
+    direction: Optional[str] = None
+    entry_price: Optional[Decimal] = None
+    entry_time: Optional[datetime] = None
+    entry_qty: Optional[int] = None
+    mfe_price: Optional[Decimal] = None
+    mfe_time: Optional[datetime] = None
+    potential_pnl: Optional[Decimal] = None
+    stopped_out: bool = False
+    stopped_out_time: Optional[datetime] = None
+    actual_pnl: Optional[Decimal] = None
+    # Diagnostic / user-visible: number of 2-min bars considered.
+    bars_considered: int = 0
+    # Human-readable note when computation couldn't run (missing bars, etc.).
+    note: Optional[str] = None
 
 
 # ─── Weekly Review (Claude-generated) ─────────────────────────────────────────

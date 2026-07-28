@@ -85,6 +85,12 @@ export interface Trade {
    *  daily/weekly tables show an "uncategorised" dot next to the Execs
    *  cell so the user is nudged to finish labelling. */
   uncategorized_count?: number | null;
+  /** Hypothetical PnL if the trade had been exited at the MFE peak
+   *  (capped at realized_pnl when a stop was hit before the peak).
+   *  Populated by /trades/{id}/day and /trades/{id}/week when a saved
+   *  MFE config + 2-min bars are both present; null otherwise.
+   *  Decimal serialised as a string. */
+  potential_pnl?: string | null;
 }
 
 /** Body for POST /api/trades */
@@ -275,6 +281,61 @@ export interface NeighborTrades {
   current: number;
   prev_id: number | null;
   next_id: number | null;
+}
+
+// ─── Trade MFE (Maximum Favorable Excursion) ────────────────────────────────
+
+/** Stored MFE inputs for one trade. `initial_stop_price` is a Decimal
+ *  serialised as a string by FastAPI/pydantic. `stop_iborderid` is
+ *  populated when the user picked an execution order as the source of
+ *  the stop level; null when the price was typed in manually. */
+export interface TradeMfeConfig {
+  trade_fk: number;
+  entry_iborderid: string;
+  initial_stop_price: string;
+  stop_iborderid: string | null;
+  updated_at: string | null;
+}
+
+/** Body for PUT /api/trades/{tradeid}/mfe. Exactly one of
+ *  `initial_stop_price` / `stop_iborderid` must be supplied — the
+ *  backend rejects both-or-neither with 400. When `stop_iborderid` is
+ *  used the backend resolves the picked order's qty-weighted avg fill
+ *  price and stores that as `initial_stop_price`. */
+export interface TradeMfeUpsert {
+  entry_iborderid: string;
+  /** Manual mode: number-like string, backend parses as Decimal. */
+  initial_stop_price?: string;
+  /** Execution mode: an ibOrderID from the trade's executions. */
+  stop_iborderid?: string;
+}
+
+/** Response for GET/PUT /api/trades/{tradeid}/mfe.
+ *
+ *  All Decimal fields arrive as strings. `config` is null until the
+ *  user saves the first time. Every `computed_*` field is null when
+ *  either the config or the 2-min bar data isn't available yet — the
+ *  frontend renders using the `note` field to explain the empty state.
+ *
+ *  `stopped_out` is true when a 2-min bar's adverse extreme touched
+ *  the initial stop before the MFE peak bar; in that case
+ *  `potential_pnl` is capped at `actual_pnl` (the MFE run wasn't
+ *  realistically capturable). */
+export interface TradeMfeResult {
+  trade_fk: number;
+  config: TradeMfeConfig | null;
+  direction: "long" | "short" | null;
+  entry_price: string | null;
+  entry_time: string | null;
+  entry_qty: number | null;
+  mfe_price: string | null;
+  mfe_time: string | null;
+  potential_pnl: string | null;
+  stopped_out: boolean;
+  stopped_out_time: string | null;
+  actual_pnl: string | null;
+  bars_considered: number;
+  note: string | null;
 }
 
 // ─── Analytics (weekly P/L per setup) ────────────────────────────────────────
