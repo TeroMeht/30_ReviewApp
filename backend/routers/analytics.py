@@ -30,11 +30,11 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo
-
+from core.config import settings
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from dependencies import get_db_conn
-from db.trades import LOCAL_TZ
+
 from schemas.api_schemas import (
     DailyPnlExecsPoint,
     DailyPnlExecsResponse,
@@ -64,7 +64,7 @@ router = APIRouter(
 # the SQL (asyncpg can't parameterise identifiers), so this MUST be a
 # closed set to prevent SQL injection.
 _ALLOWED_GROUP_BY = {"intended_setup", "setup"}
-_LOCAL_TZ_INFO = ZoneInfo(LOCAL_TZ)
+
 
 
 @router.get("/weekly-pnl", response_model=WeeklyPnlResponse)
@@ -96,7 +96,7 @@ async def get_weekly_pnl(
     # the response always has exactly `weeks` buckets, even if some are
     # empty. `today_local` is today in Helsinki; we walk back to its
     # Monday, then subtract (weeks - 1) full weeks for the window start.
-    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     this_monday = today_local - timedelta(days=today_local.weekday())
     start_monday = this_monday - timedelta(weeks=weeks - 1)
     all_week_starts: list[date] = [
@@ -113,7 +113,7 @@ async def get_weekly_pnl(
         SELECT
             (date_trunc(
                 'week',
-                ((t.date AT TIME ZONE '{LOCAL_TZ}')::date)::timestamp
+                ((t.date AT TIME ZONE '{settings.TIMEZONE}')::date)::timestamp
             ))::date AS week_start,
             t.{group_by} AS setup_label,
             (
@@ -122,7 +122,7 @@ async def get_weekly_pnl(
             )::numeric AS pnl
         FROM trades t
         JOIN executions e ON e.trade_fk = t.tradeid
-        WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= (SELECT start_monday FROM win)
+        WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= (SELECT start_monday FROM win)
           AND t.{group_by} IS NOT NULL
         GROUP BY week_start, setup_label
         ORDER BY week_start ASC, setup_label ASC
@@ -191,7 +191,7 @@ async def get_setup_stats(
 
     # Same window arithmetic as /weekly-pnl so the two endpoints can be
     # called with the same `weeks` and align.
-    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     this_monday = today_local - timedelta(days=today_local.weekday())
     start_monday = this_monday - timedelta(weeks=weeks - 1)
 
@@ -214,7 +214,7 @@ async def get_setup_stats(
                     AS hold_sec
             FROM trades t
             JOIN executions e ON e.trade_fk = t.tradeid
-            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+            WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1::date
               AND t.{group_by} IS NOT NULL
             GROUP BY t.tradeid, t.{group_by}
         )
@@ -315,7 +315,7 @@ async def get_plan_vs_actual(
     """
     # Same window arithmetic as /setup-stats so the two endpoints align
     # when called with the same `weeks` value.
-    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     this_monday = today_local - timedelta(days=today_local.weekday())
     start_monday = this_monday - timedelta(weeks=weeks - 1)
 
@@ -335,7 +335,7 @@ async def get_plan_vs_actual(
                 )::numeric AS pnl
             FROM trades t
             JOIN executions e ON e.trade_fk = t.tradeid
-            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+            WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1::date
               AND t.setup           IS NOT NULL
               AND t.intended_setup  IS NOT NULL
             GROUP BY t.tradeid, t.setup, t.intended_setup
@@ -402,7 +402,7 @@ async def get_daily_pnl_vs_execs(
     /weekly-pnl so the same `weeks` value snaps to the same start
     Monday as the other analytics endpoints.
     """
-    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     this_monday = today_local - timedelta(days=today_local.weekday())
     start_monday = this_monday - timedelta(weeks=weeks - 1)
 
@@ -413,7 +413,7 @@ async def get_daily_pnl_vs_execs(
     sql = f"""
         WITH per_trade AS (
             SELECT
-                (t.date AT TIME ZONE '{LOCAL_TZ}')::date AS local_date,
+                (t.date AT TIME ZONE '{settings.TIMEZONE}')::date AS local_date,
                 t.tradeid,
                 COUNT(DISTINCT e.iborderid)::int           AS execs,
                 (
@@ -422,7 +422,7 @@ async def get_daily_pnl_vs_execs(
                 )::numeric                                  AS pnl
             FROM trades t
             JOIN executions e ON e.trade_fk = t.tradeid
-            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+            WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1::date
             GROUP BY local_date, t.tradeid
         )
         SELECT
@@ -474,7 +474,7 @@ async def get_weekly_execs(
     weeks with no activity. Window arithmetic mirrors every other
     analytics endpoint in this module.
     """
-    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     this_monday = today_local - timedelta(days=today_local.weekday())
     start_monday = this_monday - timedelta(weeks=weeks - 1)
     all_week_starts: list[date] = [
@@ -491,7 +491,7 @@ async def get_weekly_execs(
             SELECT
                 (date_trunc(
                     'week',
-                    ((t.date AT TIME ZONE '{LOCAL_TZ}')::date)::timestamp
+                    ((t.date AT TIME ZONE '{settings.TIMEZONE}')::date)::timestamp
                 ))::date                          AS week_start,
                 t.tradeid                          AS tradeid,
                 COUNT(DISTINCT e.iborderid)::int   AS execs,
@@ -501,7 +501,7 @@ async def get_weekly_execs(
                 )::numeric                          AS pnl
             FROM trades t
             JOIN executions e ON e.trade_fk = t.tradeid
-            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+            WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1::date
             GROUP BY week_start, t.tradeid
         )
         SELECT
@@ -575,7 +575,7 @@ async def get_weekly_order_categories(
     empty weeks. Window arithmetic mirrors /weekly-execs so the two
     charts share the same x-axis when called with the same ``weeks``.
     """
-    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     this_monday = today_local - timedelta(days=today_local.weekday())
     start_monday = this_monday - timedelta(weeks=weeks - 1)
     all_week_starts: list[date] = [
@@ -593,12 +593,12 @@ async def get_weekly_order_categories(
             SELECT DISTINCT
                 (date_trunc(
                     'week',
-                    ((t.date AT TIME ZONE '{LOCAL_TZ}')::date)::timestamp
+                    ((t.date AT TIME ZONE '{settings.TIMEZONE}')::date)::timestamp
                 ))::date AS week_start,
                 e.iborderid
             FROM executions e
             JOIN trades t ON t.tradeid = e.trade_fk
-            WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+            WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1::date
               AND e.iborderid IS NOT NULL
         )
         SELECT

@@ -23,12 +23,12 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Optional
+
 
 import asyncpg
 
 from core.config import settings
-from db.trades import LOCAL_TZ
+
 
 import logging
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ async def _fetch_trades_with_pnl(
         SELECT
             t.tradeid,
             t.symbol,
-            (t.date AT TIME ZONE '{LOCAL_TZ}')::date AS day,
+            (t.date AT TIME ZONE '{settings.TIMEZONE}')::date AS day,
             t.setup,
             t.intended_setup,
             t.observed_setup,
@@ -75,7 +75,7 @@ async def _fetch_trades_with_pnl(
             END AS hold_sec
         FROM trades t
         LEFT JOIN executions e ON e.trade_fk = t.tradeid
-        WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date BETWEEN $1 AND $2
+        WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date BETWEEN $1 AND $2
         GROUP BY t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
                  t.observed_setup, t.price_action_rating, t.price_position,
                  t.category, t.notes

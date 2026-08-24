@@ -1,18 +1,3 @@
-"""
-Trades table: one row per (symbol, local-day) bucket of executions.
-
-Relationship:
-    trades 1 ── many executions
-    executions.trade_fk is a nullable FK to trades.tradeid (ON DELETE SET NULL).
-    (executions.tradeid is IB's TEXT per-fill id and is the primary key.)
-
-Auto-link logic:
-    sync_trades_from_executions() finds all executions whose trade_fk IS NULL,
-    groups them by (symbol, day-in-Europe/Helsinki), upserts a trades row for
-    each missing pair (with date = MIN(execution.datetime) for that day),
-    then sets executions.trade_fk for every matching execution.
-"""
-
 import asyncpg
 from datetime import datetime, time
 from typing import Optional
@@ -30,35 +15,13 @@ from schemas.api_schemas import (
 import logging
 logger = logging.getLogger(__name__)
 
-
-# Timezone used for the (symbol, day) bucketing. Executions are parsed in
-# Helsinki time (see services/executions.parse_time_message), so we use the
-# same zone for the unique index and for the sync grouping.
-LOCAL_TZ = "Europe/Helsinki"
+from core.config import settings
 
 
 # ─── Schema setup ─────────────────────────────────────────────────────────────
 
 async def create_trades_table(db_conn: asyncpg.Connection) -> None:
-    """Create the trades table and its (symbol, local-day) unique index.
-    Idempotent. Also applies forward-compatible ALTER TABLE migrations
-    for columns added after the initial schema (e.g. ``intended_setup``)
-    so existing deployments pick up new columns on next boot.
 
-    Schema semantics:
-        setup           — planned / target setup (what we were trying
-                          to take). NULL = unknown.
-        intended_setup  — actually executed setup (what we ended up
-                          doing). NULL = unknown / not labelled.
-        observed_setup  — TEXT[] of *other* setups that also formed on
-                          the ticker that day, regardless of whether
-                          we planned or executed them. Empty / NULL =
-                          nothing else observed. Backtesting-friendly:
-                          lets us answer "when these conditions co-
-                          occurred, what was the outcome?".
-    A trade where setup ≠ intended_setup is a deviation — useful for
-    evaluating the cost of mis-executions.
-    """
     exists = await db_conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.tables
@@ -96,7 +59,7 @@ async def create_trades_table(db_conn: asyncpg.Connection) -> None:
     # symbol per day" rule.
     await db_conn.execute(f"""
         CREATE UNIQUE INDEX IF NOT EXISTS trades_symbol_localday_uniq
-        ON trades (symbol, ((date AT TIME ZONE '{LOCAL_TZ}')::date))
+        ON trades (symbol, ((date AT TIME ZONE '{settings.TIMEZONE}')::date))
     """)
     logger.info("Trades table + unique index created successfully")
 
@@ -135,8 +98,8 @@ async def fetch_trades(
             f"""
             SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
             FROM trades
-            WHERE EXTRACT(YEAR  FROM (date AT TIME ZONE '{LOCAL_TZ}')) = $1
-              AND EXTRACT(MONTH FROM (date AT TIME ZONE '{LOCAL_TZ}')) = $2
+            WHERE EXTRACT(YEAR  FROM (date AT TIME ZONE '{settings.TIMEZONE}')) = $1
+              AND EXTRACT(MONTH FROM (date AT TIME ZONE '{settings.TIMEZONE}')) = $2
             ORDER BY date ASC
             """,
             year, month,
@@ -165,7 +128,7 @@ async def fetch_trades_in_range(
         f"""
         SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
         FROM trades
-        WHERE (date AT TIME ZONE '{LOCAL_TZ}')::date BETWEEN $1::date AND $2::date
+        WHERE (date AT TIME ZONE '{settings.TIMEZONE}')::date BETWEEN $1::date AND $2::date
         ORDER BY date ASC
         """,
         start_date,
@@ -238,11 +201,6 @@ async def delete_trade(db_conn: asyncpg.Connection, tradeid: int) -> bool:
 
 # ─── Manual trade insertion ──────────────────────────────────────────────────
 
-# Zone object reused for converting calendar dates -> TIMESTAMPTZ. We pin
-# manual trades to local midnight so the (symbol, local-day) unique index
-# treats them the same as auto-bucketed trades.
-_LOCAL_TZ_INFO = ZoneInfo(LOCAL_TZ)
-
 
 async def insert_manual_trades(
     db_conn: asyncpg.Connection,
@@ -284,7 +242,7 @@ async def insert_manual_trades(
             continue
         seen.add(key)
         # Midnight local-time, tz-aware → TIMESTAMPTZ.
-        dt = datetime.combine(e.date, time(0, 0), tzinfo=_LOCAL_TZ_INFO)
+        dt = datetime.combine(e.date, time(0, 0), tzinfo=ZoneInfo(settings.TIMEZONE))
         normalised.append((sym, dt))
 
     if in_memory_dupes:
@@ -305,11 +263,11 @@ async def insert_manual_trades(
                 RETURNING tradeid, symbol, date, setup, intended_setup, observed_setup,
                           price_action_rating, price_position, category, notes
                 """,
-                sym, dt, LOCAL_TZ,
+                sym, dt, settings.TIMEZONE,
             )
             if row is None:
                 # Conflict — a trade for (sym, that local day) already exists.
-                day_iso = dt.astimezone(_LOCAL_TZ_INFO).date().isoformat()
+                day_iso = dt.astimezone(ZoneInfo(settings.TIMEZONE)).date().isoformat()
                 db_dupes.append((sym, day_iso))
                 logger.info(
                     "Manual trade skipped (duplicate): symbol=%s date=%s",
@@ -344,18 +302,7 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
       * executions.datetime is the fill timestamp (UTC TIMESTAMPTZ).
     """
     async with db_conn.transaction():
-        # Step 1: insert missing (symbol, local-day) trades from unlinked
-        # executions. ON CONFLICT DO NOTHING relies on
-        # trades_symbol_localday_uniq so re-running is safe.
-        #
-        # Currency-conversion legs (EUR.USD, USD.EUR, and any other
-        # XXX.YYY IB cash-FX pair) are excluded here so a user who deletes
-        # an FX row from the trades table does not have Generate Trades
-        # recreate it from stale executions rows. Newer Flex fetches drop
-        # these at parse time (see services/ib_flex.parse_flex_executions),
-        # but rows inserted before that filter existed can still be sitting
-        # in the executions table with trade_fk NULL — the SQL filter here
-        # is what makes deletion permanent.
+
         created_rows = await db_conn.fetch(
             f"""
             INSERT INTO trades (symbol, date)
@@ -363,8 +310,8 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
             FROM executions
             WHERE trade_fk IS NULL
               AND symbol !~ '{CURRENCY_PAIR_SQL_RE}'
-            GROUP BY symbol, (datetime AT TIME ZONE '{LOCAL_TZ}')::date
-            ON CONFLICT (symbol, ((date AT TIME ZONE '{LOCAL_TZ}')::date)) DO NOTHING
+            GROUP BY symbol, (datetime AT TIME ZONE '{settings.TIMEZONE}')::date
+            ON CONFLICT (symbol, ((date AT TIME ZONE '{settings.TIMEZONE}')::date)) DO NOTHING
             RETURNING
                 tradeid, symbol, date, setup, intended_setup, observed_setup,
                 price_action_rating, price_position, category, notes
@@ -386,8 +333,8 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
             WHERE e.trade_fk IS NULL
               AND e.symbol !~ '{CURRENCY_PAIR_SQL_RE}'
               AND e.symbol = t.symbol
-              AND (e.datetime AT TIME ZONE '{LOCAL_TZ}')::date
-                  = (t.date     AT TIME ZONE '{LOCAL_TZ}')::date
+              AND (e.datetime AT TIME ZONE '{settings.TIMEZONE}')::date
+                  = (t.date     AT TIME ZONE '{settings.TIMEZONE}')::date
             """
         )
         # asyncpg returns "UPDATE <count>"

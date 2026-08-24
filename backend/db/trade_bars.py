@@ -9,33 +9,41 @@ Schema setup helpers are idempotent and called at app startup.
 """
 
 import asyncpg
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, NamedTuple
+
+from data_sources._base import BarSize, HistoryWindow
 
 import logging
 logger = logging.getLogger(__name__)
 
 
-class TimeframeSpec(NamedTuple):
-    label: str          # e.g. "daily" — used in logs and as URL/key
-    table: str          # PG table name
-    bar_size: str       # IBKR barSizeSetting, e.g. "1 day", "30 mins", "2 mins"
-    duration: str       # IBKR durationStr, e.g. "1 Y", "30 D", "5 D"
-    use_rth: bool       # IBKR useRTH — True = regular trading hours only,
-                        # False = include pre/post-market. Daily bars use
-                        # RTH so ATR matches the user's RTH-based daily
-                        # OHLC (extended hours inflate the daily range and
-                        # therefore ATR, which shrinks Relatr). Intraday
-                        # timeframes keep extended hours so pre/post-market
-                        # action shows up on the chart.
+@dataclass(frozen=True)
+class TimeframeSpec:
+    """
+    One timeframe of bar data to fetch per trade.
+
+    ``window`` is a ``HistoryWindow`` template: its ``bar_size`` and
+    ``lookback_days`` are the canonical description; its ``end`` is
+    ``None`` here and gets filled in per-trade by the fetcher via
+    ``dataclasses.replace(tf.window, end=...)``.
+
+    ``useRTH`` is deliberately NOT on this struct -- it's a property
+    of the bar cadence and lives inside the IB adapter's
+    ``_BAR_SIZE_TO_IB`` table. Same rule across every project.
+    """
+    label:  str            # e.g. "daily" -- used in logs and as URL/key
+    table:  str            # PG table name
+    window: HistoryWindow  # bar_size + lookback_days; end filled per fetch
 
 
 # Locked-in lookbacks: Daily 1Y / 30min 30D / 2min 5D.
-# useRTH=True only for daily — see TimeframeSpec.use_rth.
+# The IB adapter picks useRTH per bar_size (daily=True, intraday=False).
 TIMEFRAMES: list[TimeframeSpec] = [
-    TimeframeSpec("daily", "trade_bars_daily", "1 day",   "1 Y",  use_rth=True),
-    TimeframeSpec("30min", "trade_bars_30min", "30 mins", "30 D", use_rth=False),
-    TimeframeSpec("2min",  "trade_bars_2min",  "2 mins",  "5 D",  use_rth=False),
+    TimeframeSpec("daily", "trade_bars_daily", HistoryWindow(BarSize.DAILY,  365, end=None)),
+    TimeframeSpec("30min", "trade_bars_30min", HistoryWindow(BarSize.MIN_30, 30,  end=None)),
+    TimeframeSpec("2min",  "trade_bars_2min",  HistoryWindow(BarSize.MIN_2,  5,   end=None)),
 ]
 
 # Fast lookup by label.

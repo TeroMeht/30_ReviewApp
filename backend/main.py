@@ -10,7 +10,12 @@ import asyncpg
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from ib_async import IB
+
+from data_sources.ib._client import (
+    connect as ib_connect,
+    disconnect as ib_disconnect,
+    from_config as ib_source_from_config,
+)
 
 from core.config import settings
 
@@ -27,22 +32,23 @@ from db.playbook import create_playbook_table
 from db.weekly_reviews import create_weekly_reviews_table
 
 
-# Process-wide IBKR client. Connected during lifespan, reused by routes.
-ib = IB()
+# Process-wide IBSource. Built here, connected in the lifespan below,
+# stashed on app.state, and used by routes via get_ib_source. No lazy
+# reconnect: if TWS goes down after boot, restart the backend.
+ib_source = ib_source_from_config(settings)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: open DB pool only. IBKR is connected lazily — see
-    routers/trades.py /fetch-bars-batch which calls ensure_ib_connected().
+    """Startup: open DB pool, then open the IBKR socket.
 
-    The IB() object is still created here and stashed on app.state so
-    get_ib() can hand it out, but no socket is opened. This means the
-    backend boots even when TWS / IB Gateway isn't running; only the
-    market-data fetch path needs the live connection.
+    IBKR connect is wrapped in try/except so the backend still boots
+    when TWS / IB Gateway isn't running -- market-data routes will just
+    return 503 until TWS is up AND the backend is restarted. This keeps
+    the app's config-editing / review pages usable in a TWS-off state.
 
-    Shutdown: close DB pool, and disconnect IB if it was opened during
-    the session.
+    Shutdown: close DB pool, disconnect IB (disconnect is idempotent,
+    so it's safe whether or not the connect succeeded).
     """
     db_pool: asyncpg.Pool | None = None
     try:
@@ -58,16 +64,22 @@ async def lifespan(app: FastAPI):
             await create_playbook_table(conn)
             await create_weekly_reviews_table(conn)
 
-        app.state.ib = ib
-        app.state.db_pool = db_pool
+        # Open the IB socket. On failure log and continue -- routes
+        # that need IB check isConnected() and return 503 themselves.
+        try:
+            await ib_connect(ib_source)
 
-        logger.info(
-            "Backend ready. IBKR not connected yet — will connect on first "
-            "market-data fetch (host=%s port=%s clientId=%s).",
-            settings.IB_HOST,
-            settings.IB_PORT,
-            settings.IB_CLIENT_ID,
-        )
+        except Exception as e:
+            logger.warning(
+                "IBKR connect failed at startup (%s). Backend will boot; "
+                "market-data routes will return 503 until TWS / IB Gateway "
+                "is running AND the backend is restarted.",
+                e,
+            )
+
+        app.state.ib_source = ib_source
+        app.state.db_pool = db_pool
+        logger.info("Backend ready.")
 
     except Exception:
         logger.exception("Startup failed")
@@ -79,9 +91,8 @@ async def lifespan(app: FastAPI):
         if db_pool is not None:
             await db_pool.close()
             logger.info("PostgreSQL pool closed")
-        if ib.isConnected():
-            ib.disconnect()
-            logger.info("IBKR disconnected")
+        ib_disconnect(ib_source)
+        logger.info("IBKR disconnected (no-op if never connected)")
     except Exception:
         logger.exception("Error during shutdown")
 

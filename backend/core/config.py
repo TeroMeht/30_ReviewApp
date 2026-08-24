@@ -10,14 +10,19 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
+# IB connection fields (IB_HOST / IB_PORT / IB_CLIENT_ID) come from
+# this mixin -- declared in ONE place across every project that talks
+# to IB. Env-key names unchanged, so the existing 30_ReviewApp.env file
+# keeps working.
+from data_sources.ib._config import IBSourceConfig
 
-class Settings(BaseSettings):
+
+class Settings(IBSourceConfig, BaseSettings):
     # --- Database ---
     DATABASE_URL: str
 
     # --- Interactive Brokers ---
-    IB_HOST: str
-    IB_PORT: int
+    # IB_HOST / IB_PORT / IB_CLIENT_ID inherited from IBSourceConfig above.
     IB_CLIENT_ID: int
 
     # --- API ---
@@ -33,6 +38,7 @@ class Settings(BaseSettings):
     # Opus for deeper analysis or Haiku for cheap/fast drafts.
     ANTHROPIC_MODEL: str
 
+    TIMEZONE:str
 
 
     # --- IB Flex Web Service (historical executions with accurate timestamps) ---

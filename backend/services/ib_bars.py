@@ -1,41 +1,20 @@
-"""
-IBKR historical-bar fetching for trades.
-
-For each trade we pull three timeframes (daily 1Y, 30min 30D, 2min 5D),
-ending at the trade's `date`. RTH only, whatToShow='TRADES'. Each (tradeid,
-timeframe) pair is fetched at most once: if rows already exist for that
-combination we skip — manual retries can be done via the dedicated route.
-
-Concurrency model — fully serial:
-  Trades are processed one at a time. Within each trade, timeframes are
-  fetched one at a time (sequential await, not asyncio.gather). This means
-  only one IB historical-data request is ever in flight at any moment,
-  which satisfies IB's pacing constraints without needing a lock.
-
-`schedule_bar_fetch_batch` exposes a fire-and-forget API: it spawns an
-asyncio background task and returns immediately. The task pulls fresh DB
-connections from the app's pool, so it doesn't depend on the request's
-connection lifetime.
-
-Bar timestamps are stored TIMESTAMPTZ but normalised to Europe/Helsinki
-before insert so reads return Helsinki-offset datetimes (matches the rest
-of the app — executions and trades both bucket on Europe/Helsinki).
-"""
-
 import asyncio
+from dataclasses import replace
 from datetime import datetime, date, time as dt_time, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 import asyncpg
-from ib_async import IB, Stock
+
+from data_sources.ib._client import IBSource
+from data_sources.ib._source import IBHistoricalSource
 
 from schemas.api_schemas import (
     Trade,
     BarFetchResult,
     BarFetchTimeframeResult,
 )
-from db.trades import fetch_trade_by_id, LOCAL_TZ
+from db.trades import fetch_trade_by_id
 from db.trade_bars import (
     TIMEFRAMES,
     TimeframeSpec,
@@ -46,16 +25,27 @@ from db.trade_bars import (
 
 import logging
 logger = logging.getLogger(__name__)
+from core.config import settings
 
 
-_HELSINKI_TZ = ZoneInfo(LOCAL_TZ)
 
-# Per-request IB timeout. 60s is well above typical response time.
-_IB_REQUEST_TIMEOUT_SEC: float = 60.0
+
 
 # In-memory fetch status (reset on restart).
 _IN_FLIGHT: set[int] = set()
 _LAST_ERROR: dict[int, str] = {}
+
+
+def _make_historical(source: IBSource) -> IBHistoricalSource:
+    """Build the IB adapter with 30_ReviewApp defaults.
+
+    ``format_date=2`` -> intraday ``bar.date`` comes back as a
+    tz-aware UTC datetime, which ``_bar_time_to_datetime`` can safely
+    convert to Helsinki. Without it, intraday bar.date would be naive
+    in the IB account's local time and there's no reliable way for us
+    to interpret that from here.
+    """
+    return IBHistoricalSource(source, format_date=2)
 
 
 def is_fetching(tradeid: int) -> bool:
@@ -106,20 +96,25 @@ async def fetch_bar_counts_for_trades(
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _bar_time_to_datetime(d) -> datetime:
+    """Normalize an IncomingBar.date value to a tz-aware Helsinki datetime.
+
+    For intraday bars (via IBHistoricalSource(format_date=2)), .date is
+    a tz-aware UTC datetime -> convert to Helsinki. For daily bars,
+    .date is a datetime.date -> midnight Helsinki.
+
+    A NAIVE datetime is treated as UTC (defensive; shouldn't happen when
+    the adapter is built with format_date=2).
+    """
     if isinstance(d, datetime):
         dt_utc = d if d.tzinfo is not None else d.replace(tzinfo=timezone.utc)
-        return dt_utc.astimezone(_HELSINKI_TZ)
+        return dt_utc.astimezone(ZoneInfo(settings.TIMEZONE))
     if isinstance(d, date):
-        return datetime.combine(d, dt_time(0, 0), tzinfo=_HELSINKI_TZ)
+        return datetime.combine(d, dt_time(0, 0), tzinfo=ZoneInfo(settings.TIMEZONE))
     raise TypeError(f"Unexpected bar.date type: {type(d).__name__}")
 
 
-def _stock_contract(symbol: str) -> Stock:
-    return Stock(symbol, "SMART", "USD")
-
-
 def _window_end_for_trade(trade_date: datetime) -> datetime:
-    local = trade_date.astimezone(ZoneInfo(LOCAL_TZ))
+    local = trade_date.astimezone(ZoneInfo(settings.TIMEZONE))
     end_local = local.replace(hour=23, minute=59, second=59, microsecond=0)
     end_utc = end_local.astimezone(timezone.utc)
     now = datetime.now(timezone.utc)
@@ -129,7 +124,7 @@ def _window_end_for_trade(trade_date: datetime) -> datetime:
 # ─── Per-timeframe fetch ──────────────────────────────────────────────────────
 
 async def _fetch_one_timeframe(
-    ib: IB,
+    historical: IBHistoricalSource,
     db_conn: asyncpg.Connection,
     trade: Trade,
     tf: TimeframeSpec,
@@ -138,41 +133,33 @@ async def _fetch_one_timeframe(
     existing = await count_bars(db_conn, trade.tradeid, tf)
     if existing > 0:
         logger.info(
-            "[bars %s/%s tradeid=%d] skipping — %d rows already present",
+            "[bars %s/%s tradeid=%d] skipping -- %d rows already present",
             trade.symbol, tf.label, trade.tradeid, existing,
         )
         return BarFetchTimeframeResult(
             timeframe=tf.label, inserted=0, skipped=True, existing=existing,
         )
 
-    contract = _stock_contract(trade.symbol)
     end_dt = _window_end_for_trade(trade.date)
+    window = replace(tf.window, end=end_dt)
+
     logger.info(
-        "[bars %s/%s tradeid=%d] requesting: barSize=%s duration=%s end=%s useRTH=%s",
-        trade.symbol, tf.label, trade.tradeid, tf.bar_size, tf.duration, end_dt, tf.use_rth,
+        "[bars %s/%s tradeid=%d] requesting: bar_size=%s lookback=%dD end=%s",
+        trade.symbol, tf.label, trade.tradeid,
+        window.bar_size, window.lookback_days, end_dt,
     )
 
     try:
         bars = await asyncio.wait_for(
-            ib.reqHistoricalDataAsync(
-                contract,
-                endDateTime=end_dt,
-                durationStr=tf.duration,
-                barSizeSetting=tf.bar_size,
-                whatToShow="TRADES",
-                useRTH=tf.use_rth,
-                formatDate=2,
-            ),
-            timeout=_IB_REQUEST_TIMEOUT_SEC,
+            historical.fetch(trade.symbol, window)
         )
     except asyncio.TimeoutError:
         logger.warning(
-            "[bars %s/%s tradeid=%d] IB request timed out after %.0fs",
-            trade.symbol, tf.label, trade.tradeid, _IB_REQUEST_TIMEOUT_SEC,
+            "[bars %s/%s tradeid=%d]",
+            trade.symbol, tf.label, trade.tradeid
         )
         return BarFetchTimeframeResult(
-            timeframe=tf.label, inserted=0, skipped=False,
-            error=f"ib_timeout_{int(_IB_REQUEST_TIMEOUT_SEC)}s",
+            timeframe=tf.label, inserted=0, skipped=False, error="timeout",
         )
     except Exception as e:
         logger.exception(
@@ -219,17 +206,17 @@ async def _fetch_one_timeframe(
 # ─── Trade-level fetch ────────────────────────────────────────────────────────
 
 async def fetch_bars_for_trade(
-    ib: IB,
+    historical: IBHistoricalSource,
     db_pool: asyncpg.Pool,
     trade: Trade,
 ) -> BarFetchResult:
     """
     Fetch all timeframes for a single trade, one at a time (serial).
 
-    Each timeframe gets its own pooled DB connection. Per-timeframe failures
-    are recorded but don't stop the remaining timeframes.
+    Each timeframe gets its own pooled DB connection. Per-timeframe
+    failures are recorded but don't stop the remaining timeframes.
     """
-    if not ib.isConnected():
+    if not historical.source.ib.isConnected():
         logger.warning("IB not connected; cannot fetch bars for tradeid=%d", trade.tradeid)
         return BarFetchResult(
             tradeid=trade.tradeid,
@@ -247,7 +234,7 @@ async def fetch_bars_for_trade(
     for tf in TIMEFRAMES:
         async with db_pool.acquire() as conn:
             try:
-                result = await _fetch_one_timeframe(ib, conn, trade, tf)
+                result = await _fetch_one_timeframe(historical, conn, trade, tf)
             except Exception as e:
                 logger.exception(
                     "[bars tradeid=%d %s/%s] unexpected error",
@@ -282,15 +269,18 @@ async def find_incomplete_tradeids(db_conn: asyncpg.Connection) -> list[int]:
 # ─── Batch / queue ────────────────────────────────────────────────────────────
 
 async def _process_batch(
-    ib: IB,
+    source: IBSource,
     db_pool: asyncpg.Pool,
     tradeids: list[int],
 ) -> None:
     """
-    Background worker: process each trade serially. Each trade's timeframes
-    are also fetched serially, so only one IB request is ever in flight.
+    Background worker: process each trade serially. Each trade's
+    timeframes are also fetched serially, so only one IB request is
+    ever in flight.
     """
     logger.info("Bar-fetch batch starting: %d trade(s) queued", len(tradeids))
+    historical = _make_historical(source)   # one adapter for the whole batch
+
     for tid in tradeids:
         try:
             async with db_pool.acquire() as conn:
@@ -302,7 +292,7 @@ async def _process_batch(
             continue
 
         try:
-            result = await fetch_bars_for_trade(ib, db_pool, trade)
+            result = await fetch_bars_for_trade(historical, db_pool, trade)
             errors = [r.error for r in result.results if r.error]
             if errors:
                 _LAST_ERROR[tid] = "; ".join(errors)
@@ -318,12 +308,12 @@ async def _process_batch(
 
 
 def schedule_bar_fetch_batch(
-    ib: IB,
+    source: IBSource,
     db_pool: asyncpg.Pool,
     tradeids: list[int],
 ) -> tuple[list[int], list[int]]:
     """
-    Fire-and-forget: spawn a background task that processes `tradeids`
+    Fire-and-forget: spawn a background task that processes ``tradeids``
     one at a time. Returns (scheduled, skipped_already_fetching).
     """
     scheduled: list[int] = []
@@ -338,7 +328,7 @@ def schedule_bar_fetch_batch(
 
     if scheduled:
         asyncio.create_task(
-            _process_batch(ib, db_pool, scheduled),
+            _process_batch(source, db_pool, scheduled),
             name=f"bar-fetch-batch[{len(scheduled)}]",
         )
     return scheduled, skipped

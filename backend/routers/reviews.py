@@ -16,11 +16,11 @@ Endpoints:
 
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
-
+from core.config import settings
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from dependencies import get_db_conn
-from db.trades import LOCAL_TZ
+
 from db.weekly_reviews import (
     fetch_weekly_review,
     list_review_weeks,
@@ -49,7 +49,7 @@ def _monday(d: date) -> date:
 
 def _current_monday() -> date:
     """Monday of the current week in the trader's local timezone."""
-    today = datetime.now(ZoneInfo(LOCAL_TZ)).date()
+    today = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     return _monday(today)
 
 
@@ -62,10 +62,10 @@ async def get_weeks(db_conn=Depends(get_db_conn)):
     # Trade counts per local Mon–Sun week within the window.
     rows = await db_conn.fetch(
         f"""
-        SELECT (date_trunc('week', (date AT TIME ZONE '{LOCAL_TZ}')))::date AS wk,
+        SELECT (date_trunc('week', (date AT TIME ZONE '{settings.TIMEZONE}')))::date AS wk,
                COUNT(*) AS n
         FROM trades
-        WHERE (date AT TIME ZONE '{LOCAL_TZ}')::date >= $1
+        WHERE (date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1
         GROUP BY wk
         """,
         earliest,

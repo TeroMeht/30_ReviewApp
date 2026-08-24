@@ -1,10 +1,11 @@
-from datetime import date
+
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Query
-from ib_async import IB
 import asyncpg
 
-from dependencies import get_db_conn, get_db_pool, get_ib, ensure_ib_connected
+from data_sources.ib._client import IBSource
+from core.config import settings
+from dependencies import get_db_conn, get_db_pool, get_ib_source
 from schemas.api_schemas import (
     Trade,
     TradeCreate,
@@ -28,7 +29,6 @@ from db.trades import (
     fetch_trade_by_id,
     update_trade,
     delete_trade,
-    LOCAL_TZ,
 )
 from db.trade_bars import TIMEFRAMES, TIMEFRAME_BY_LABEL
 from services.ib_bars import (
@@ -150,7 +150,7 @@ async def sync_trades(
 async def fetch_bars_batch(
     db_conn=Depends(get_db_conn),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    ib: IB = Depends(get_ib),
+    source: IBSource = Depends(get_ib_source),
 ):
     """
     "Update Market Data" button entry point.
@@ -159,17 +159,22 @@ async def fetch_bars_batch(
     schedules a background batch to fetch them. Returns immediately —
     the actual IB calls happen on a background task that processes one
     ticker at a time (per IB pacing rules); inside a ticker, the three
-    timeframes fire concurrently.
+    timeframes fire serially.
 
     UI polls GET /api/trades/bars-status?tradeids=... to track progress.
 
-    Connection is opened lazily here: if IBKR isn't connected yet (the
-    common case at first click after startup), we attempt to connect to
-    TWS / IB Gateway and only fail with 503 if that doesn't succeed.
+    IB was connected once at backend startup (see main.lifespan). If
+    the socket isn't up here (TWS was off at boot, or dropped since),
+    return 503 -- restart the backend after starting TWS.
     """
-    # ensure_ib_connected() either returns the live client or raises a
-    # 503 with a user-readable detail — no need for a separate check.
-    await ensure_ib_connected(ib)
+    if not source.ib.isConnected():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "IBKR is not connected. Start TWS / IB Gateway and restart "
+                "the backend."
+            ),
+        )
 
     try:
         tradeids = await find_incomplete_tradeids(db_conn)
@@ -179,7 +184,7 @@ async def fetch_bars_batch(
             detail=f"Failed to find incomplete trades: {e}",
         )
 
-    scheduled, skipped = schedule_bar_fetch_batch(ib, db_pool, tradeids)
+    scheduled, skipped = schedule_bar_fetch_batch(source, db_pool, tradeids)
     logger.info(
         "fetch-bars-batch: scheduled=%d skipped_already_fetching=%d",
         len(scheduled), len(skipped),
@@ -494,7 +499,7 @@ async def get_trades_in_week(
         WITH ref AS (
           SELECT date_trunc(
             'week',
-            (date AT TIME ZONE '{LOCAL_TZ}')::date::timestamp
+            (date AT TIME ZONE '{settings.TIMEZONE}')::date::timestamp
           ) + ($2::int * INTERVAL '1 week') AS week_start
           FROM trades WHERE tradeid = $1
         )
@@ -515,7 +520,7 @@ async def get_trades_in_week(
         LEFT JOIN order_categories oc ON oc.iborderid = e.iborderid
         WHERE  date_trunc(
                  'week',
-                 (t.date AT TIME ZONE '{LOCAL_TZ}')::date::timestamp
+                 (t.date AT TIME ZONE '{settings.TIMEZONE}')::date::timestamp
                ) = ref.week_start
         GROUP BY t.tradeid, ref.week_start
         ORDER BY t.date ASC, t.tradeid ASC
@@ -540,33 +545,11 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    # `realized_pnl` is computed inline so the daily table can show
-    # per-trade P/L and the page can sum them for a day total without a
-    # second roundtrip.
-    #
-    # `quantity` in executions is SIGNED — positive on BUY, negative on
-    # SELL (carried straight from IB Flex). So per-row cash flow is
-    # simply `-quantity * price`:
-    #   * BUY  +70 @ 56.07  →  cash out  -70*56.07  = -3924.9
-    #   * SELL -32 @ 55.52  →  cash in  -(-32)*55.52 = +1776.7
-    #
-    # `ibcommission` is stored negative (it's a cost), so summing it in
-    # produces a net figure.
-    #
-    # NULL when no executions are linked yet — distinguishes "no fills"
-    # from "fills that net to zero".
-    #
-    # Caveat: this is the *raw cash flow*, which equals realized P/L
-    # only when the trade is flat (Σ quantity = 0). For partially-closed
-    # positions the number includes the cost basis of the open shares.
-    # `uncategorized_count`: LEFT JOIN order_categories on e.iborderid so
-    # every fill of an uncategorised order has oc.iborderid = NULL. FILTER
-    # then counts distinct e.iborderids where no category row exists.
-    # A trade with no fills yields 0.
+
     rows = await db_conn.fetch(
         f"""
         WITH ref AS (
-          SELECT (date AT TIME ZONE '{LOCAL_TZ}')::date AS local_day
+          SELECT (date AT TIME ZONE '{settings.TIMEZONE}')::date AS local_day
           FROM   trades WHERE tradeid = $1
         )
         SELECT  t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
@@ -583,7 +566,7 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
         FROM    trades t
         LEFT JOIN executions e ON e.trade_fk = t.tradeid
         LEFT JOIN order_categories oc ON oc.iborderid = e.iborderid
-        WHERE   (t.date AT TIME ZONE '{LOCAL_TZ}')::date = (SELECT local_day FROM ref)
+        WHERE   (t.date AT TIME ZONE '{settings.TIMEZONE}')::date = (SELECT local_day FROM ref)
         GROUP BY t.tradeid
         ORDER BY MIN(e.datetime) ASC NULLS LAST, t.tradeid ASC
         """,

@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from dependencies import get_db_conn
-from db.trades import LOCAL_TZ
+from core.config import settings
 from schemas.api_schemas import (
     PlaybookNotes,
     PlaybookNotesUpdate,
@@ -45,7 +45,6 @@ router = APIRouter(
 )
 
 
-_LOCAL_TZ_INFO = ZoneInfo(LOCAL_TZ)
 
 
 def _window_start(weeks: Optional[int]) -> Optional[date]:
@@ -54,7 +53,7 @@ def _window_start(weeks: Optional[int]) -> Optional[date]:
     skip the date filter entirely."""
     if weeks is None:
         return None
-    today_local = datetime.now(_LOCAL_TZ_INFO).date()
+    today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
     this_monday = today_local - timedelta(days=today_local.weekday())
     return this_monday - timedelta(weeks=weeks - 1)
 
@@ -119,7 +118,7 @@ async def list_playbook_setups(
                     )::numeric AS pnl
                 FROM trades t
                 JOIN executions e ON e.trade_fk = t.tradeid
-                WHERE (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $1::date
+                WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1::date
                   AND t.observed_setup IS NOT NULL
                   AND array_length(t.observed_setup, 1) > 0
                 GROUP BY t.tradeid, t.observed_setup
@@ -198,7 +197,7 @@ async def list_playbook_trades_for_setup(
     else:
         sql = (
             base_select
-            + f" AND (t.date AT TIME ZONE '{LOCAL_TZ}')::date >= $2::date"
+            + f" AND (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $2::date"
             + group_order
         )
         rows = await db_conn.fetch(sql, label, start_monday)
