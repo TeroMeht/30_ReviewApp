@@ -1,260 +1,91 @@
 """
-IBKR Flex Web Service client.
+Project-side wrapper around ``data_sources.ib`` Flex utilities.
 
-The Flex Web Service is a separate IB endpoint (NOT part of the TWS API)
-that returns arbitrarily-historical statements for any date range. Unlike
-the email parser this gives us:
-  * the broker's authoritative fill timestamp (down to the second)
-  * a unique per-fill execId that survives across emails and re-imports
-  * fills more than a few days old
+The transport (submit -> poll), the XML -> ``Execution`` parse, and
+the ET -> UTC timezone handling all live under
+``data_sources.ib._flex_client`` / ``_flex_parser`` -- shared with any
+future project that reads Flex reports. This file keeps the two
+30_ReviewApp-specific concerns that don't belong in the common
+package:
 
-Two-step request flow:
-  1. POST /SendRequest?t=<token>&q=<queryId>&v=3   →  ReferenceCode
-  2. GET  /GetStatement?t=<token>&q=<refCode>&v=3  →  XML statement
-     (often returns "Statement generation in progress" first; we poll
-     until the actual XML report comes back, with a timeout.)
+  * Normalize the raw IB ticker via ``helpers.example.normalize_symbol``
+    (project-specific taxonomy -- CFD suffixes, exchange qualifiers)
+    and drop currency-conversion legs (``EUR.USD`` etc.) with
+    ``helpers.example.is_currency_conversion``. Trade auto-bucketing
+    joins on ``executions.symbol``, so any cleanup HAS to happen
+    before rows reach the DB or the JOIN loses CFD-derived rows.
 
-The XML schema depends on the Flex Query's configuration. We look for
-<Trade> rows under <Trades>; field names that we expect are listed in
-``_REQUIRED_TRADE_FIELDS`` below. Edit the Flex Query in IB Account
-Management if any are missing.
+  * Adapt the canonical ``data_sources.ib.Execution`` dataclass (frozen
+    dataclass, provider shape) into the project's pydantic
+    ``schemas.api_schemas.Execution`` shape (used as a FastAPI
+    ``response_model`` and stamped with an in-flight ``db_status`` by
+    ``db.executions.insert_executions``).
 """
-
 from __future__ import annotations
 
-import asyncio
 import logging
-import xml.etree.ElementTree as ET
-from datetime import  datetime
-from decimal import Decimal
-from typing import Optional
-from zoneinfo import ZoneInfo
 
-# IB Flex `dateTime` attributes are wall-clock US/Eastern (EST in winter,
-# EDT in summer) with no offset information in the string. We localize to
-# America/New_York so DST is handled automatically, then convert to UTC so
-# the value stored in TIMESTAMPTZ is unambiguous regardless of the DB
-# session's timezone (otherwise asyncpg interprets a naive datetime in the
-# server's local zone — e.g. Helsinki — and the offset ends up wrong).
-_IB_TZ = ZoneInfo("America/New_York")
-_UTC = ZoneInfo("UTC")
-
-import httpx
+from data_sources.ib._execution   import Execution as SourceExecution
+from data_sources.ib._flex_client import fetch_flex_report
+from data_sources.ib._flex_parser import parse_executions
 
 from core.config import settings
 from helpers.example import normalize_symbol, is_currency_conversion
 from schemas.api_schemas import Execution
 
+
 logger = logging.getLogger(__name__)
 
 
-# Public Flex Web Service v3 endpoints. These don't change.
-_FLEX_BASE = "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
-_FLEX_SUBMIT = f"{_FLEX_BASE}/SendRequest"
-_FLEX_DOWNLOAD = f"{_FLEX_BASE}/GetStatement"
-
-# How long we wait for a generated report. IB usually completes simple
-# trade queries in < 5 s, but allow plenty of headroom for big windows.
-_DEFAULT_POLL_TIMEOUT_SEC = 60.0
-_POLL_INTERVAL_SEC = 2.0
-
-# Currency-conversion legs are matched generically via
-# helpers.example.is_currency_conversion (any XXX.YYY pair), not a
-# hard-coded list — the broker auto-converts between any pair of held
-# currencies, so EUR.USD is just the pair we see most often.
+# Chosen to match the previous project-local value; every knob else
+# lives on the common client. Raise at the call site if a very long
+# window ever needs more than 60s.
+_DEFAULT_POLL_TIMEOUT_SEC: float = 60.0
 
 
+def _adapt(src: SourceExecution, *, symbol: str) -> Execution:
+    """``data_sources.ib.Execution`` (dataclass) -> project's pydantic
+    ``Execution``. ``symbol`` is passed in already-normalized so the
+    caller can filter and adapt in one loop."""
+    return Execution(
+        dateTime     = src.dateTime,
+        symbol       = symbol,
+        tradeID      = src.tradeID,
+        buySell      = src.buySell,
+        quantity     = src.quantity,
+        tradePrice   = src.tradePrice,
+        ibOrderID    = src.ibOrderID,
+        ibCommission = src.ibCommission,
+    )
 
 
-# ─── Low-level HTTP ───────────────────────────────────────────────────────────
+async def fetch_executions_from_ib(
+    *,
+    poll_timeout_sec: float = _DEFAULT_POLL_TIMEOUT_SEC,
+) -> list[Execution]:
+    """Submit -> poll -> parse -> project-side filter + adapt."""
+    body = await fetch_flex_report(
+        settings.IB_FLEX_TOKEN,
+        settings.IB_FLEX_QUERY_ID,
+        submit_url      = settings.IB_FLEX_SUBMIT_URL,
+        download_url    = settings.IB_FLEX_DOWNLOAD_URL,
+        poll_timeout_sec= poll_timeout_sec,
+    )
 
+    raw = parse_executions(body)
 
-async def _submit_flex_request(client: httpx.AsyncClient,token: str,query_id: str) -> str:
-    """Submit a Flex Query run, return the IB-issued ReferenceCode."""
-    params = {"t": token, "q": query_id, "v": "3"}
-    resp = await client.get(_FLEX_SUBMIT, params=params, timeout=30.0)
-    resp.raise_for_status()
-    root = ET.fromstring(resp.text)
-
-    status = (root.findtext("Status") or "").strip()
-    if status != "Success":
-        # Error responses look like:
-        #   <FlexStatementResponse><Status>Fail</Status>
-        #     <ErrorCode>1009</ErrorCode><ErrorMessage>...</ErrorMessage></FlexStatementResponse>
-        err_code = (root.findtext("ErrorCode") or "").strip()
-        err_msg = (root.findtext("ErrorMessage") or "unknown error").strip()
-        raise RuntimeError(f"Flex SendRequest failed [{err_code}]: {err_msg}")
-
-    ref = (root.findtext("ReferenceCode") or "").strip()
-    if not ref:
-        raise RuntimeError("Flex SendRequest returned no ReferenceCode")
-    logger.info("Flex SendRequest OK, reference=%s", ref)
-    return ref
-
-
-async def _download_flex_report(client: httpx.AsyncClient,token: str,reference_code: str,*,timeout_sec: float = _DEFAULT_POLL_TIMEOUT_SEC) -> str:
-    """
-    Poll GetStatement until IB produces the report. Returns the raw XML body.
-
-    IB's first response after submission is usually:
-        <FlexStatementResponse><Status>Warn</Status>
-          <ErrorCode>1019</ErrorCode>
-          <ErrorMessage>Statement generation in progress.</ErrorMessage>
-        </FlexStatementResponse>
-    so we keep polling until either:
-      * we get a real <FlexQueryResponse> body, or
-      * we exceed timeout_sec.
-    """
-    params = {"t": token, "q": reference_code, "v": "3"}
-    deadline = asyncio.get_event_loop().time() + timeout_sec
-    while True:
-        resp = await client.get(_FLEX_DOWNLOAD, params=params, timeout=30.0)
-        resp.raise_for_status()
-        body = resp.text
-         # debugging: log the raw response so we can diagnose parsing issues in the wild
-
-        # The "still generating" response uses the FlexStatementResponse root;
-        # the real report uses FlexQueryResponse. Sniff the first XML tag.
-        if "<FlexQueryResponse" in body:
-            logger.info("Flex GetStatement: report ready (%d bytes)", len(body))
-            return body
-
-        # Likely warn/in-progress. Parse to confirm and possibly bail on real errors.
-        try:
-            root = ET.fromstring(body)
-            status = (root.findtext("Status") or "").strip()
-            err_code = (root.findtext("ErrorCode") or "").strip()
-            err_msg = (root.findtext("ErrorMessage") or "").strip()
-        except ET.ParseError:
-            status, err_code, err_msg = "Unknown", "", body[:200]
-
-        if status == "Fail":
-            raise RuntimeError(f"Flex GetStatement failed [{err_code}]: {err_msg}")
-
-        if asyncio.get_event_loop().time() >= deadline:
-            raise TimeoutError(
-                f"Flex report not ready after {timeout_sec:.0f}s "
-                f"(last status={status!r}, code={err_code!r}, msg={err_msg!r})"
-            )
-
-        logger.debug(
-            "Flex GetStatement still generating (status=%s, code=%s) — sleeping %.1fs",
-            status, err_code, _POLL_INTERVAL_SEC,
-        )
-        await asyncio.sleep(_POLL_INTERVAL_SEC)
-
-
-# ─── Parsing ──────────────────────────────────────────────────────────────────
-
-
-# Helper to get XML attribute safely
-def _row_get(elem: ET.Element, attr: str) -> Optional[str]:
-    return elem.attrib.get(attr)
-
-# Helper to parse dateTime from Flex XML (format: YYYYMMDD;HHMMSS).
-# IB reports wall-clock time in US/Eastern; we attach that tz (DST-aware)
-# and convert to UTC so the resulting datetime is unambiguous.
-def _parse_flex_datetime(value: str) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        naive = datetime.strptime(value, "%Y%m%d;%H%M%S")
-    except ValueError:
-        return None
-    return naive.replace(tzinfo=_IB_TZ).astimezone(_UTC)
-
-# Helper to normalize buy/sell actions
-def _action_for_buy_sell(value: str) -> str:
-    return value.upper() if value else ""
-
-def parse_flex_executions(xml_body: str) -> list[Execution]:
-    """
-    Walk the Flex XML and return ExecutionFromXML rows.
-    Does not skip any trades; missing numeric fields are set to zero,
-    missing strings are set to empty strings, missing dateTime is None.
-    """
-    try:
-        root = ET.fromstring(xml_body)
-    except ET.ParseError as e:
-        raise RuntimeError(f"Flex report is not valid XML: {e}") from e
-
-    out: list[Execution] = []
+    kept: list[Execution] = []
     skipped_fx = 0
-
-    # Parse all <Trade> elements anywhere in XML
-    for trade_elem in root.iter("Trade"):
-        # Normalise the symbol upfront so the FX-skip check sees the
-        # canonical form (matches what would be stored in executions.symbol).
-        symbol = normalize_symbol(_row_get(trade_elem, "symbol") or "")
-
-        # Drop any XXX.YYY currency-conversion leg — these aren't trades,
-        # they're the broker auto-converting cash balances and would
-        # pollute the journal. The DB-side filter in
-        # db.trades.sync_trades_from_executions is the backstop for FX
-        # rows that were inserted before this parser-side check existed.
+    for src in raw:
+        symbol = normalize_symbol(src.symbol)
         if is_currency_conversion(symbol):
             skipped_fx += 1
             continue
-
-        dateTime_str = _row_get(trade_elem, "dateTime") or ""
-        ts = _parse_flex_datetime(dateTime_str)
-
-        # Convert numerics safely
-        try:
-            quantity = int(float(_row_get(trade_elem, "quantity") or 0))
-        except (TypeError, ValueError):
-            quantity = 0
-
-        try:
-            tradePrice = Decimal(str(_row_get(trade_elem, "tradePrice") or 0))
-        except (TypeError, ValueError):
-            tradePrice = Decimal(0)
-
-        try:
-            ibCommission = Decimal(str(_row_get(trade_elem, "ibCommission") or 0))
-        except (TypeError, ValueError):
-            ibCommission = Decimal(0)
-
-        out.append(
-            Execution(
-                dateTime=ts,
-                # Normalise here (not later) so executions.symbol is the
-                # canonical underlying ticker. Trade auto-bucketing groups
-                # by executions.symbol, so any cleanup HAS to happen at
-                # insert time or the JOIN in sync_trades_from_executions
-                # won't link CFD-derived rows.
-                symbol=symbol,
-                tradeID=(_row_get(trade_elem, "tradeID") or "").strip(),
-                buySell=_action_for_buy_sell(_row_get(trade_elem, "buySell")),
-                quantity=quantity,
-                tradePrice=tradePrice,
-                ibOrderID=(_row_get(trade_elem, "ibOrderID") or "").strip(),
-                ibCommission=ibCommission,
-            )
-        )
+        kept.append(_adapt(src, symbol=symbol))
 
     logger.info(
-        "Parsed %d trades from XML (skipped %d FX conversion rows)",
-        len(out),
+        "Flex fetch: %d executions kept, %d FX conversion rows skipped",
+        len(kept),
         skipped_fx,
     )
-    return out
-
-
-# ─── Orchestrator ───────────────────────────────────────────────────────────────────────
-
-
-async def fetch_executions_from_ib(*,poll_timeout_sec: float = _DEFAULT_POLL_TIMEOUT_SEC) -> list[Execution]:
-    
-    """End-to-end: submit → poll → parse. Date-filtered to [start, end]."""
-    if not settings.IB_FLEX_TOKEN or not settings.IB_FLEX_QUERY_ID:
-        raise RuntimeError(
-            "IB Flex is not configured. Set IB_FLEX_TOKEN and IB_FLEX_QUERY_ID "
-            "in your .env (see core/config.py for details)."
-        )
-
-    async with httpx.AsyncClient(http2=False) as client:
-        ref = await _submit_flex_request(client, settings.IB_FLEX_TOKEN, settings.IB_FLEX_QUERY_ID)
-        body = await _download_flex_report(client, settings.IB_FLEX_TOKEN, ref, timeout_sec=poll_timeout_sec)
-        print(body)
-    return parse_flex_executions(body)
+    return kept

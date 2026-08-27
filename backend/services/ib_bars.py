@@ -150,9 +150,8 @@ async def _fetch_one_timeframe(
     )
 
     try:
-        bars = await asyncio.wait_for(
-            historical.fetch(trade.symbol, window)
-        )
+        bars = await historical.fetch(trade.symbol, window)
+        
     except asyncio.TimeoutError:
         logger.warning(
             "[bars %s/%s tradeid=%d]",
@@ -215,21 +214,12 @@ async def fetch_bars_for_trade(
 
     Each timeframe gets its own pooled DB connection. Per-timeframe
     failures are recorded but don't stop the remaining timeframes.
-    """
-    if not historical.source.ib.isConnected():
-        logger.warning("IB not connected; cannot fetch bars for tradeid=%d", trade.tradeid)
-        return BarFetchResult(
-            tradeid=trade.tradeid,
-            symbol=trade.symbol,
-            results=[
-                BarFetchTimeframeResult(
-                    timeframe=tf.label, inserted=0, skipped=False,
-                    error="ib_not_connected",
-                )
-                for tf in TIMEFRAMES
-            ],
-        )
 
+    Connection-readiness is the caller's problem -- the /fetch-bars-batch
+    route checks ``source.ib.isConnected()`` and returns 503 before this
+    ever gets called. If the socket drops mid-batch, individual fetch
+    calls raise and the per-timeframe error branch records it.
+    """
     results: list[BarFetchTimeframeResult] = []
     for tf in TIMEFRAMES:
         async with db_pool.acquire() as conn:

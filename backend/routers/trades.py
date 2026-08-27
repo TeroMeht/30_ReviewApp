@@ -407,10 +407,9 @@ async def get_trade_bars(
         ]
 
     # Indicators (EMA9, anchored VWAP, Relatr, Rvol, …) are computed on the
-    # bars we just read. Pure functions in `calculations/`, dispatched by
-    # timeframe in `services.chart_indicators` so the same code can be
-    # reused by the backtest layer later.
-    indicators = build_indicators(tf.label, bars, daily_bars=daily_bars)
+    # bars we just read. All math lives in the shared `indicators` package;
+    # `services.chart_indicators` is only the timeframe -> overlay wiring.
+    indicators = build_indicators(tf.label, bars, daily_bars=daily_bars, symbol=trade.symbol)
     return BarsResponse(
         tradeid=tradeid,
         symbol=trade.symbol,
