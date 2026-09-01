@@ -10,7 +10,6 @@ from schemas.api_schemas import (
     Trade,
     TradeCreate,
     TradeUpdate,
-    TradeMfeConfig,
     TradeSyncRequest,
     TradeSyncResult,
     BarFetchBatchResult,
@@ -39,45 +38,11 @@ from services.ib_bars import (
     get_last_error,
 )
 from services.chart_indicators import build_indicators
-from services.mfe import compute_mfe
 
 
 import logging
 logger = logging.getLogger(__name__)
 
-
-async def _attach_potential_pnl(db_conn, trades: list[Trade]) -> None:
-    """Populate `trade.potential_pnl` (in place) for every trade in
-    `trades` that has a saved MFE config. Trades without a config keep
-    `potential_pnl = None`.
-
-    One SELECT to pull every relevant `trade_mfe` row, then a compute
-    per trade. compute_mfe itself issues its own bar/execution queries,
-    so this is N+O(1) round-trips for N trades with configs — fine at
-    daily/weekly scale (<= a few dozen). If this ever becomes a hot
-    path we can batch the bar reads too.
-    """
-    if not trades:
-        return
-    tradeids = [t.tradeid for t in trades]
-    config_rows = await db_conn.fetch(
-        """
-        SELECT trade_fk, entry_iborderid, initial_stop_price,
-               stop_iborderid, updated_at
-        FROM trade_mfe
-        WHERE trade_fk = ANY($1::int[])
-        """,
-        tradeids,
-    )
-    if not config_rows:
-        return
-    configs = {int(r["trade_fk"]): TradeMfeConfig(**dict(r)) for r in config_rows}
-    for t in trades:
-        cfg = configs.get(t.tradeid)
-        if cfg is None:
-            continue
-        result = await compute_mfe(db_conn, t.tradeid, cfg)
-        t.potential_pnl = result.potential_pnl
 
 router = APIRouter(
     prefix="/api/trades",
@@ -108,17 +73,8 @@ async def sync_trades(
 ):
     """Run two passes:
       1. Insert any `manual_trades` from the request body (no executions).
-         Conflicts (a trade for that (symbol, day) already exists) are
-         skipped silently and counted in `manual_trades_skipped`.
       2. Auto-bucket: create trades from any unlinked executions and link
          them.
-
-    Order matters: manual trades land first so any matching executions get
-    linked to them in the auto-bucket pass.
-
-    Bar-fetch scheduling is intentionally NOT triggered here — the
-    /data-management UI gates that behind the explicit "Start data fetch"
-    button so the user can review trades first.
     """
     manual_entries = payload.manual_trades if payload else []
     try:
@@ -129,8 +85,6 @@ async def sync_trades(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trade sync failed: {e}")
 
-    # Merge: manual rows always come first in trades_created_rows so the UI
-    # can render them above the auto-bucketed ones if it cares to.
     merged_rows = manual_rows + auto_result.trades_created_rows
     merged_ids = [t.tradeid for t in manual_rows] + auto_result.trades_created_ids
 
@@ -154,18 +108,6 @@ async def fetch_bars_batch(
 ):
     """
     "Update Market Data" button entry point.
-
-    Finds every trade that's missing at least one timeframe of bars and
-    schedules a background batch to fetch them. Returns immediately —
-    the actual IB calls happen on a background task that processes one
-    ticker at a time (per IB pacing rules); inside a ticker, the three
-    timeframes fire serially.
-
-    UI polls GET /api/trades/bars-status?tradeids=... to track progress.
-
-    IB was connected once at backend startup (see main.lifespan). If
-    the socket isn't up here (TWS was off at boot, or dropped since),
-    return 503 -- restart the backend after starting TWS.
     """
     if not source.ib.isConnected():
         raise HTTPException(
@@ -204,24 +146,11 @@ async def bars_status(
     ),
     db_conn=Depends(get_db_conn),
 ):
-    """
-    Per-trade bar fetch status. UI polls this while a batch is running.
-
-    For each requested tradeid we return:
-      * symbol, date — pulled from the trades table so the UI can render
-                       a human-readable row without a second round-trip
-      * timeframes  — current row counts per (daily/30min/2min)
-      * status      — pending | fetching | partial | done | error
-      * last_error  — last background-fetch error, if any
-    """
     if not tradeids:
         return []
 
     try:
         counts = await fetch_bar_counts_for_trades(db_conn, tradeids)
-        # One query for symbol + date — the trades table has the canonical
-        # values; we keep this endpoint a strict superset of what the UI
-        # needs to render the table.
         trade_rows = await db_conn.fetch(
             "SELECT tradeid, symbol, date FROM trades WHERE tradeid = ANY($1::int[])",
             tradeids,
@@ -238,7 +167,6 @@ async def bars_status(
     for tid in tradeids:
         meta = trade_meta.get(tid)
         if meta is None:
-            # Trade was deleted between scheduling and polling — skip.
             continue
         per_tf = counts.get(tid, {tf.label: 0 for tf in TIMEFRAMES})
         status = compute_bar_status(tid, per_tf)
@@ -276,8 +204,7 @@ async def get_latest_trade(db_conn=Depends(get_db_conn)):
     """Return the trade with the largest `date`. Default landing row for the review page."""
     row = await db_conn.fetchrow(
         """
-        SELECT tradeid, symbol, date, setup, intended_setup, observed_setup,
-               price_action_rating, price_position, category, notes
+        SELECT tradeid, symbol, date, setup, category, notes
         FROM trades
         ORDER BY date DESC, tradeid DESC
         LIMIT 1
@@ -348,10 +275,6 @@ async def get_trade_bars(
     timeframe: str = Query(..., description="daily | 30min | 2min"),
     db_conn=Depends(get_db_conn),
 ):
-    """All bars for (tradeid, timeframe) ordered chronologically.
-    The full set is returned — bar counts per timeframe stay well under
-    1000 (1Y daily ~250, 30D 30min ~390, 5D 2min ~975) so we don't
-    paginate. Charts manage their own visible window."""
     tf = TIMEFRAME_BY_LABEL.get(timeframe)
     if tf is None:
         raise HTTPException(
@@ -382,9 +305,6 @@ async def get_trade_bars(
         for r in rows
     ]
 
-    # For the 2-min chart, Relatr needs a daily ATR scalar — pull the daily
-    # series from `trade_bars_daily` and hand it to the indicator builder.
-    # Other timeframes don't read indicators, so we skip the round-trip.
     daily_bars: list[BarRowSchema] | None = None
     if tf.label == "2min":
         daily_table = TIMEFRAME_BY_LABEL["daily"].table
@@ -406,9 +326,6 @@ async def get_trade_bars(
             for r in daily_rows
         ]
 
-    # Indicators (EMA9, anchored VWAP, Relatr, Rvol, …) are computed on the
-    # bars we just read. All math lives in the shared `indicators` package;
-    # `services.chart_indicators` is only the timeframe -> overlay wiring.
     indicators = build_indicators(tf.label, bars, daily_bars=daily_bars, symbol=trade.symbol)
     return BarsResponse(
         tradeid=tradeid,
@@ -421,21 +338,12 @@ async def get_trade_bars(
 
 @router.get("/{tradeid}/neighbors", response_model=NeighborTrades)
 async def get_trade_neighbors(tradeid: int, db_conn=Depends(get_db_conn)):
-    """Adjacent tradeids in date order.
-
-    Convention (matches user mental model):
-      * prev_id = ONE STEP BACK IN TIME (older trade)
-      * next_id = ONE STEP FORWARD IN TIME (newer trade)
-
-    Ties are broken by tradeid so two trades sharing the same `date`
-    still have a deterministic order.
-    """
+    """Adjacent tradeids in date order."""
     try:
         current = await fetch_trade_by_id(db_conn, tradeid)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    # Older trade: (date, tradeid) STRICTLY less than the current.
     prev_row = await db_conn.fetchrow(
         """
         SELECT tradeid FROM trades
@@ -445,7 +353,6 @@ async def get_trade_neighbors(tradeid: int, db_conn=Depends(get_db_conn)):
         """,
         current.date, current.tradeid,
     )
-    # Newer trade: (date, tradeid) STRICTLY greater than the current.
     next_row = await db_conn.fetchrow(
         """
         SELECT tradeid FROM trades
@@ -468,31 +375,12 @@ async def get_trades_in_week(
     offset: int = 0,
     db_conn=Depends(get_db_conn),
 ):
-    """All trades in a Mon–Sun Helsinki week, anchored on this trade's week.
-
-    `offset` shifts which week is returned, in whole weeks, relative to
-    the anchor trade's week:
-      *  0 → this trade's own week (default)
-      * -1 → the week before
-      * +1 → the week after
-    Used by the weekly table's prev/next-week controls so the user can
-    browse adjacent weeks without changing the reviewed trade.
-
-    `execution_count` and `realized_pnl` are computed inline (mirroring
-    the /day endpoint) so the weekly table can show per-trade fills + P/L
-    and sum them for a week total without a second roundtrip. See the
-    /day endpoint for notes on the signed-quantity arithmetic and the
-    flat-vs-partially-closed caveat.
-    """
+    """All trades in a Mon–Sun Helsinki week, anchored on this trade's week."""
     try:
         await fetch_trade_by_id(db_conn, tradeid)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    # `uncategorized_count`: LEFT JOIN order_categories on e.iborderid so
-    # every fill of an uncategorised order has oc.iborderid = NULL. FILTER
-    # then counts distinct e.iborderids where no category row exists.
-    # A trade with no fills yields 0.
     rows = await db_conn.fetch(
         f"""
         WITH ref AS (
@@ -502,8 +390,7 @@ async def get_trades_in_week(
           ) + ($2::int * INTERVAL '1 week') AS week_start
           FROM trades WHERE tradeid = $1
         )
-        SELECT t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
-               t.observed_setup, t.price_action_rating, t.price_position,
+        SELECT t.tradeid, t.symbol, t.date, t.setup,
                t.category, t.notes,
                COUNT(DISTINCT e.iborderid)::int AS execution_count,
                COUNT(DISTINCT e.iborderid)
@@ -527,23 +414,16 @@ async def get_trades_in_week(
         tradeid,
         offset,
     )
-    trades = [Trade(**dict(r)) for r in rows]
-    await _attach_potential_pnl(db_conn, trades)
-    return trades
+    return [Trade(**dict(r)) for r in rows]
+
 
 @router.get("/{tradeid}/day", response_model=list[Trade])
 async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
-    """All trades on the same Helsinki calendar day as this trade.
-
-    Ordered by each trade's earliest linked execution timestamp (so the
-    trade that fired first in real time is first in the table). Trades
-    with no executions yet fall back to NULLS LAST + tradeid.
-    """
+    """All trades on the same Helsinki calendar day as this trade."""
     try:
         await fetch_trade_by_id(db_conn, tradeid)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
 
     rows = await db_conn.fetch(
         f"""
@@ -551,8 +431,7 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
           SELECT (date AT TIME ZONE '{settings.TIMEZONE}')::date AS local_day
           FROM   trades WHERE tradeid = $1
         )
-        SELECT  t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
-                t.observed_setup, t.price_action_rating, t.price_position,
+        SELECT  t.tradeid, t.symbol, t.date, t.setup,
                 t.category, t.notes,
                 COUNT(DISTINCT e.iborderid)::int AS execution_count,
                 COUNT(DISTINCT e.iborderid)
@@ -571,7 +450,4 @@ async def get_trades_on_day(tradeid: int, db_conn=Depends(get_db_conn)):
         """,
         tradeid,
     )
-    trades = [Trade(**dict(r)) for r in rows]
-    await _attach_potential_pnl(db_conn, trades)
-    return trades
-
+    return [Trade(**dict(r)) for r in rows]

@@ -59,10 +59,6 @@ async def _fetch_trades_with_pnl(
             t.symbol,
             (t.date AT TIME ZONE '{settings.TIMEZONE}')::date AS day,
             t.setup,
-            t.intended_setup,
-            t.observed_setup,
-            t.price_action_rating,
-            t.price_position,
             t.category,
             t.notes,
             COUNT(DISTINCT e.iborderid) AS exec_count,
@@ -76,8 +72,7 @@ async def _fetch_trades_with_pnl(
         FROM trades t
         LEFT JOIN executions e ON e.trade_fk = t.tradeid
         WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date BETWEEN $1 AND $2
-        GROUP BY t.tradeid, t.symbol, t.date, t.setup, t.intended_setup,
-                 t.observed_setup, t.price_action_rating, t.price_position,
+        GROUP BY t.tradeid, t.symbol, t.date, t.setup,
                  t.category, t.notes
         ORDER BY day ASC, t.tradeid ASC
         """,
@@ -117,12 +112,8 @@ def _aggregate(trades: list[dict]) -> dict:
     decided = wins + losses + scratches
     win_rate = round(wins / decided, 4) if decided else 0.0
     total_execs = sum(int(t.get("exec_count") or 0) for t in trades)
-    # Plan deviations: planned setup populated AND differs from intended.
-    deviations = sum(
-        1 for t in trades
-        if t.get("setup") and t.get("intended_setup")
-        and t["setup"] != t["intended_setup"]
-    )
+    # Plan deviations feature was removed in the review-page simplification.
+    deviations = 0
     return {
         "trade_count": len(trades),
         "trades_with_pnl": len(with_pnl),
@@ -170,10 +161,7 @@ def _build_user_prompt(
         "trailing_weeks_raw_trades": trailing_trades,
         "playbook": playbook,
         "field_notes": {
-            "setup": "planned setup for the day",
-            "intended_setup": "what was actually executed (a plan deviation is setup != intended_setup)",
-            "observed_setup": "other setups that also formed that day (backtest labels)",
-            "price_action_rating": "1-5 quality score",
+            "setup": "the setup label for the trade",
             "realized_pnl": "net cash P/L in account currency; null = no executions linked",
             "hold_sec": "hold time in seconds",
             "exec_count": "distinct orders that made up the trade (high = lots of in/out)",

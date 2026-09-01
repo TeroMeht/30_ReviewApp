@@ -54,13 +54,12 @@ function fmtDate(iso: string): string {
 
 interface Props {
   trade: PlaybookTradeSummary;
-  /** The setup label this card is being rendered under — used to filter
-   *  the "other observed setups" chip so the section's own label isn't
-   *  listed alongside its peers. */
-  sectionLabel: string;
+  /** The setup label this card is being rendered under. Kept for API
+   *  compatibility with callers; no longer used inside the card. */
+  sectionLabel?: string;
 }
 
-export default function PlaybookChartCard({ trade, sectionLabel }: Props) {
+export default function PlaybookChartCard({ trade }: Props) {
   const router = useRouter();
   const cardRef = useRef<HTMLDivElement | null>(null);
 
@@ -118,14 +117,6 @@ export default function PlaybookChartCard({ trade, sectionLabel }: Props) {
       cancelled = true;
     };
   }, [inView, trade.tradeid, bars, executions]);
-
-  // Other setups observed on this trade besides the section's own label.
-  // Surfaces multi-pattern days so you can see when this setup tends to
-  // co-occur with others — useful when designing rules that may need
-  // those co-occurrences as filters or confirmations.
-  const otherObserved = (trade.observed_setup ?? []).filter(
-    (s) => s !== sectionLabel,
-  );
 
   const goToTrade = () => {
     router.push(`/trade-review?id=${trade.tradeid}`);
@@ -188,28 +179,6 @@ export default function PlaybookChartCard({ trade, sectionLabel }: Props) {
           {fmtDate(trade.date)}
         </span>
       </div>
-
-      {/* Other observed setups chip. */}
-      {otherObserved.length > 0 && (
-        <div
-          style={{
-            fontSize: 10,
-            color: "#1e3a8a",
-            background: "#dbeafe",
-            border: "1px solid #bfdbfe",
-            borderRadius: 999,
-            padding: "2px 8px",
-            alignSelf: "flex-start",
-            maxWidth: "100%",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-          title={`Also observed on this trade: ${otherObserved.join(", ")}`}
-        >
-          + {otherObserved.join(", ")}
-        </div>
-      )}
 
       {/* Chart area — placeholder, error, or live chart. Click bubbles
           up to the card; we stop propagation on the chart in case a

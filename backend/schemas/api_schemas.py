@@ -60,17 +60,7 @@ class OrderCategoryUpsert(BaseModel):
 class Trade(BaseModel):
     """A trade row as stored / returned from the DB.
 
-    Three setup fields are tracked:
-      * ``setup``           – the *planned* / target setup for the day.
-      * ``intended_setup``  – what was *actually* executed.
-      * ``observed_setup``  – list of *other* setups that also formed
-                              on the ticker that day, regardless of
-                              plan/execution. Empty list / None means
-                              nothing else observed. Backtesting label.
-    A deviation is ``setup != intended_setup``. ``setup`` and
-    ``intended_setup`` are free-form text (taxonomy enforced in the
-    UI) and either can be None. ``observed_setup`` is a Postgres
-    TEXT[] mapped to a Python list.
+    ``setup`` is a free-form text label (taxonomy enforced in the UI).
 
     ``execution_count`` is opt-in: most endpoints leave it as None. The
     /trades/{id}/day and /trades/{id}/week endpoints populate it with
@@ -90,10 +80,6 @@ class Trade(BaseModel):
     symbol: str
     date: datetime
     setup: Optional[str] = None
-    intended_setup: Optional[str] = None
-    observed_setup: Optional[list[str]] = None
-    price_action_rating: Optional[int] = None
-    price_position: Optional[int] = None
     category: Optional[str] = None
     notes: Optional[str] = None
     execution_count: Optional[int] = None
@@ -103,13 +89,6 @@ class Trade(BaseModel):
     # uncategorised orders (distinct iborderids with no matching
     # order_categories row). None on every other read.
     uncategorized_count: Optional[int] = None
-    # Opt-in: populated by /trades/{id}/day and /trades/{id}/week when a
-    # trade has a saved MFE config and 2-min bars available. Represents
-    # the hypothetical PnL if the trade had been exited at the MFE peak
-    # (capped at realized_pnl when a stop-run happened before the peak).
-    # None when the trade has no MFE config saved, has no bars, or has
-    # no executions. See services/mfe.py for the compute logic.
-    potential_pnl: Optional[Decimal] = None
 
 
 class TradeCreate(BaseModel):
@@ -117,10 +96,6 @@ class TradeCreate(BaseModel):
     symbol: str
     date: datetime
     setup: Optional[str] = None
-    intended_setup: Optional[str] = None
-    observed_setup: Optional[list[str]] = None
-    price_action_rating: Optional[int] = Field(default=None, ge=1, le=5)
-    price_position: Optional[int] = None
     category: Optional[str] = None
     notes: Optional[str] = None
 
@@ -130,10 +105,6 @@ class TradeUpdate(BaseModel):
     symbol: Optional[str] = None
     date: Optional[datetime] = None
     setup: Optional[str] = None
-    intended_setup: Optional[str] = None
-    observed_setup: Optional[list[str]] = None
-    price_action_rating: Optional[int] = Field(default=None, ge=1, le=5)
-    price_position: Optional[int] = None
     category: Optional[str] = None
     notes: Optional[str] = None
 
@@ -286,119 +257,6 @@ class NeighborTrades(BaseModel):
 
 # ─── Analytics ────────────────────────────────────────────────────────────────
 
-class WeeklyPnlBucket(BaseModel):
-    """One week's per-setup P/L breakdown.
-
-    ``week_start`` is the Monday (Europe/Helsinki) anchoring the bucket.
-    ``by_setup`` maps each setup label to its summed realized P/L for
-    that week, serialized as a Decimal string to keep the API
-    Decimal-safe. Setups with zero P/L in the week may be omitted; the
-    frontend treats missing keys as 0. NULL-setup trades are excluded
-    upstream.
-    """
-    week_start: date
-    by_setup: dict[str, Decimal] = Field(default_factory=dict)
-
-
-class WeeklyPnlResponse(BaseModel):
-    """Response for GET /api/analytics/weekly-pnl.
-
-    ``weeks`` is contiguous — every Mon..Sun bucket in the requested
-    window is present, even if no trades fell in it, so the frontend
-    can render a stable x-axis. ``setups`` is the alphabetically-sorted
-    list of every distinct setup that appeared anywhere in the window,
-    giving the frontend a stable color/legend ordering.
-
-    ``group_by`` echoes back the field the server attributed P/L to
-    (``intended_setup`` or ``setup``) so the page can label the chart.
-    """
-    group_by: str
-    weeks: list[WeeklyPnlBucket]
-    setups: list[str]
-
-
-class SetupStatsRow(BaseModel):
-    """Aggregated stats for one setup over the requested window.
-
-    Trades with no executions linked are excluded (no P/L computable).
-    Trades with P/L exactly 0 are counted in ``trade_count`` as
-    "scratches" — they don't contribute to ``avg_win`` or ``avg_loss``
-    but they are still part of the denominator for ``win_rate`` and
-    ``expectancy``, matching how a trader would think about it: a
-    scratch is a trade that happened, just not a winner.
-
-    ``avg_loss`` is a *negative* number (loss in dollars). ``avg_win``
-    is positive. Both are NULL when the bucket they describe is empty
-    (e.g. ``avg_win`` is NULL if the setup never won in the window).
-
-    ``avg_win_hold_sec`` / ``avg_loss_hold_sec`` are average hold
-    times in seconds, computed as MAX(execution.datetime) -
-    MIN(execution.datetime) per trade then averaged. Single-fill
-    trades contribute 0 seconds.
-
-    ``expectancy`` is net P/L per trade across the whole bucket
-    (including scratches): ``(wins * avg_win + losses * avg_loss) /
-    trade_count``. The number you'd expect to make on the next trade
-    of this setup if the past N weeks are representative.
-    """
-    setup: str
-    trade_count: int
-    wins: int
-    losses: int
-    scratches: int
-    win_rate: float  # 0.0–1.0
-    avg_win: Optional[Decimal] = None
-    avg_loss: Optional[Decimal] = None
-    avg_win_hold_sec: Optional[int] = None
-    avg_loss_hold_sec: Optional[int] = None
-    expectancy: Decimal
-
-
-class SetupStatsResponse(BaseModel):
-    """Response for GET /api/analytics/setup-stats. Rows are sorted
-    by setup label alphabetically. ``group_by`` echoes which trade
-    column the rows are bucketed against. ``weeks`` echoes the
-    window size used."""
-    group_by: str
-    weeks: int
-    rows: list[SetupStatsRow]
-
-
-class PlanVsActualRow(BaseModel):
-    """One (planned setup → actual setup) bucket over the requested window.
-
-    Only trades where both ``setup`` (planned) and ``intended_setup``
-    (actual) are populated contribute — the mapping is meaningless
-    otherwise. Trades with no executions linked are also excluded (no
-    P/L computable).
-
-    A row where ``planned_setup == actual_setup`` is a *matched* trade
-    (you did what you intended). Any other row is a *deviation* — the
-    cost of those rows is the question this view exists to answer.
-
-    P/L fields are Decimal-as-string at the API boundary. ``total_pnl``
-    is the summed realised P/L over every trade in the bucket;
-    ``avg_pnl`` is per-trade.
-    """
-    planned_setup: str
-    actual_setup: str
-    trade_count: int
-    wins: int
-    losses: int
-    scratches: int
-    win_rate: float  # 0.0–1.0
-    total_pnl: Decimal
-    avg_pnl: Decimal
-
-
-class PlanVsActualResponse(BaseModel):
-    """Response for GET /api/analytics/plan-vs-actual. Rows are sorted
-    by ``total_pnl`` ascending so the costliest deviations bubble to
-    the top. ``weeks`` echoes the window size used."""
-    weeks: int
-    rows: list[PlanVsActualRow]
-
-
 class DailyPnlExecsPoint(BaseModel):
     """One trading day's aggregate execution count and realised P/L.
 
@@ -426,17 +284,7 @@ class DailyPnlExecsResponse(BaseModel):
 
 
 class WeeklyExecsBucket(BaseModel):
-    """One Mon..Sun (Helsinki) week's total execution count.
-
-    ``week_start`` is the Monday anchoring the bucket. ``exec_count`` is
-    the sum of distinct ``iborderid`` values across every trade in that
-    week — matches the per-day "Total execs" metric, aggregated by week.
-    ``trade_count`` is the number of distinct trades in the week.
-    ``total_pnl`` is the summed realised P/L over every trade in the week
-    (Decimal-as-string at the API boundary). Includes trades whose
-    setup column is NULL — unlike /weekly-pnl, which excludes them.
-    Empty weeks are still returned (zeros) so the chart x-axis is stable.
-    """
+    """One Mon..Sun (Helsinki) week's total execution count."""
     week_start: date
     exec_count: int
     trade_count: int
@@ -458,20 +306,7 @@ class WeeklyOrderCategoriesBucket(BaseModel):
     Counts are the number of distinct IB orders (iborderids) whose
     parent trade fell in the given week, split by trade-review
     category. ``uncategorized`` picks up every order that has no row in
-    ``order_categories`` yet, so
-        cat1 + cat2 + cat3 + cat4 + uncategorized
-        == exec_count for the same week in /weekly-execs.
-    That equality is what lets the chart double as a discipline view
-    over the total order volume.
-
-    Category taxonomy (matches db/order_categories.py):
-      * cat1 — Followed plan, made money.
-      * cat2 — Followed plan, stopped out at predefined stop.
-      * cat3 — Off-plan (FOMO / revenge), lost money.
-      * cat4 — Off-plan, made money in the end.
-
-    Empty weeks (no orders at all) are still returned with zeros so
-    the chart x-axis stays stable.
+    ``order_categories`` yet.
     """
     week_start: date
     cat1: int = 0
@@ -482,11 +317,7 @@ class WeeklyOrderCategoriesBucket(BaseModel):
 
 
 class WeeklyOrderCategoriesResponse(BaseModel):
-    """Response for GET /api/analytics/weekly-order-categories. ``weeks`` is
-    contiguous over the requested window (every Mon..Sun bucket is
-    present, even empty ones). ``window_weeks`` echoes the window size
-    used — the endpoint uses the same window arithmetic as
-    /weekly-execs so the two charts always share an x-axis."""
+    """Response for GET /api/analytics/weekly-order-categories."""
     window_weeks: int
     weeks: list[WeeklyOrderCategoriesBucket]
 
@@ -498,11 +329,9 @@ class PlaybookSetupSummary(BaseModel):
     aggregate stats over the requested window. Powers the Playbook
     page's section list.
 
-    ``total_pnl`` is the summed realised P/L over every trade where this
-    label appears in ``observed_setup``. Trades with no executions are
-    excluded (no P/L). A trade with multiple observed setups contributes
-    its full P/L to each setup's total — the Playbook is a per-pattern
-    study view, not an attribution model.
+    ``total_pnl`` is the summed realised P/L over every trade whose
+    ``setup`` matches the label. Trades with no executions are excluded
+    (no P/L).
     """
     setup_label: str
     trade_count: int
@@ -518,23 +347,18 @@ class PlaybookSetupsResponse(BaseModel):
 
 class PlaybookTradeSummary(BaseModel):
     """One trade as it appears in the Playbook chart grid for a given
-    setup. Slim subset of ``Trade`` plus the precomputed ``realized_pnl``
-    and the full ``observed_setup`` list so the card can render its
-    "+ other observed setups" chip without a second roundtrip.
+    setup. Slim subset of ``Trade`` plus the precomputed ``realized_pnl``.
     """
     tradeid: int
     symbol: str
     date: datetime
     setup: Optional[str] = None
-    intended_setup: Optional[str] = None
-    observed_setup: Optional[list[str]] = None
     realized_pnl: Optional[Decimal] = None
 
 
 class PlaybookTradesResponse(BaseModel):
     """Response for GET /api/playbook/setups/{label}/trades. Trades are
-    sorted by ``date`` descending — most recent first. ``setup_label``
-    echoes which observed-setup label was queried."""
+    sorted by ``date`` descending — most recent first."""
     setup_label: str
     weeks: Optional[int] = None
     trades: list[PlaybookTradeSummary]
@@ -565,117 +389,10 @@ class PlaybookNotesUpdate(BaseModel):
     examples: Optional[str] = None
 
 
-# ─── Trade MFE (Maximum Favorable Excursion) ─────────────────────────────────
-#
-# One row per trade in `trade_mfe`. Stores the user-picked entry order and the
-# initial stop level so we can compute:
-#   * MFE price     — max favorable bar extreme from entry_time to end of the
-#                     US RTH session on the entry's trading day. For a long
-#                     entry (BUY) that's max(bar.high); for a short entry
-#                     (SELL) it's min(bar.low).
-#   * Potential PnL — (mfe_price - entry_price) * qty for longs,
-#                     (entry_price - mfe_price) * qty for shorts,
-#                     where qty is the picked entry order's total shares.
-#   * Stopped-out flag — chronological check on 2-min bars from entry
-#                     forward: if any bar.low <= stop (long) or bar.high >=
-#                     stop (short) occurs BEFORE the MFE peak bar, we treat
-#                     the trade as having been stopped out. In that case
-#                     potential_pnl is set to actual_pnl (no favorable run
-#                     was realistically capturable).
-#
-# The user pinpoints one execution order (iborderid) as the entry — the
-# executions table typically has multiple orders (scaling in / out), so we
-# don't try to guess. `initial_stop_price` is user-supplied because the
-# realized stop-loss order price may reflect a mid-trade adjustment.
-
-
-class TradeMfeConfig(BaseModel):
-    """Stored MFE configuration for one trade — the user-provided inputs.
-
-    ``entry_iborderid`` references one row in the trade's ExecutionsTable
-    (grouped by iborderid). ``initial_stop_price`` is the price level the
-    user planned to stop out at before any mid-trade adjustments.
-
-    ``stop_iborderid`` is optional metadata: when the user picked an
-    executed order as the source of the stop level (e.g. the actual
-    stop order that filled, when it wasn't moved), we store its id so
-    the UI can restore the "picked from execution" state on reload.
-    NULL means the price was typed in manually.
-    """
-    trade_fk: int
-    entry_iborderid: str
-    initial_stop_price: Decimal
-    stop_iborderid: Optional[str] = None
-    updated_at: Optional[datetime] = None
-
-
-class TradeMfeUpsert(BaseModel):
-    """Body for PUT /api/trades/{tradeid}/mfe.
-
-    ``entry_iborderid`` is always required. The stop can be provided as
-    EITHER a manual price OR a picked execution order (the backend
-    resolves the picked order to its qty-weighted avg fill price).
-    Exactly one of ``initial_stop_price`` / ``stop_iborderid`` must be
-    supplied — the router validates this and returns 400 otherwise.
-    """
-    entry_iborderid: str
-    initial_stop_price: Optional[Decimal] = None
-    stop_iborderid: Optional[str] = None
-
-
-class TradeMfeResult(BaseModel):
-    """Response for GET/PUT /api/trades/{tradeid}/mfe.
-
-    ``config`` is the stored inputs (None until the user saves the first
-    time). All ``computed_*`` fields are None when either config or the
-    2-min bar data isn't available yet.
-
-    ``direction`` is 'long' or 'short', derived from the picked entry
-    order's buySell side. ``entry_price`` is the qty-weighted average
-    fill price for the picked order. ``entry_qty`` is the total shares
-    of the picked order (absolute value; sign is captured by
-    ``direction``).
-
-    ``mfe_price`` / ``mfe_time`` describe the bar extreme that defined
-    the peak. ``potential_pnl`` is the hypothetical result of exiting
-    at the MFE peak on the picked entry's shares. ``stopped_out`` is
-    True when a 2-min bar between entry and the MFE bar touched the
-    initial stop — in that case ``potential_pnl`` is capped at
-    ``actual_pnl`` and ``stopped_out_time`` marks when the stop was
-    first tagged.
-
-    ``actual_pnl`` is the trade's cumulative realized P/L across all
-    executions (same figure the daily/weekly tables show).
-    """
-    trade_fk: int
-    config: Optional[TradeMfeConfig] = None
-    direction: Optional[str] = None
-    entry_price: Optional[Decimal] = None
-    entry_time: Optional[datetime] = None
-    entry_qty: Optional[int] = None
-    mfe_price: Optional[Decimal] = None
-    mfe_time: Optional[datetime] = None
-    potential_pnl: Optional[Decimal] = None
-    stopped_out: bool = False
-    stopped_out_time: Optional[datetime] = None
-    actual_pnl: Optional[Decimal] = None
-    # Diagnostic / user-visible: number of 2-min bars considered.
-    bars_considered: int = 0
-    # Human-readable note when computation couldn't run (missing bars, etc.).
-    note: Optional[str] = None
-
-
 # ─── Weekly Review (Claude-generated) ─────────────────────────────────────────
 
 class WeeklyReview(BaseModel):
-    """A stored, Claude-generated review for one Mon–Sun (Helsinki) week.
-
-    ``week_start`` is the Monday anchoring the week. ``content`` is the
-    review body as markdown. ``stats`` is the aggregate snapshot the
-    review was built from (P/L, trade count, win rate, number of plan
-    deviations, etc.) so the page can show headline numbers without
-    recomputing. ``model`` records which Anthropic model produced it.
-    """
+    """A stored, Claude-generated review for one Mon–Sun (Helsinki) week."""
     week_start: date
     model: str = ""
     content: str = ""
@@ -684,13 +401,7 @@ class WeeklyReview(BaseModel):
 
 
 class WeeklyReviewWeek(BaseModel):
-    """One selectable week in GET /api/reviews/weeks.
-
-    ``week_start`` is the Monday (local). ``label`` is a human range like
-    '2026-05-25 → 2026-05-31'. ``trade_count`` is how many trades fall in
-    the week (0 weeks are still listed so the user can pick recent empty
-    weeks). ``has_review`` is True if a generated review is already stored.
-    """
+    """One selectable week in GET /api/reviews/weeks."""
     week_start: date
     week_end: date
     label: str

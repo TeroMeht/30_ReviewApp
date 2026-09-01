@@ -31,13 +31,23 @@ async def create_trades_table(db_conn: asyncpg.Connection) -> None:
 
     if exists:
         logger.info("Trades table already exists, skipping creation")
-        # Forward-compat migration: pick up new columns on existing DBs.
+        # Forward-compat migration: drop columns that are no longer part
+        # of the simplified trade review model.
         await db_conn.execute(
-            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS intended_setup TEXT"
+            "ALTER TABLE trades DROP COLUMN IF EXISTS intended_setup"
         )
         await db_conn.execute(
-            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS observed_setup TEXT[]"
+            "ALTER TABLE trades DROP COLUMN IF EXISTS observed_setup"
         )
+        await db_conn.execute(
+            "ALTER TABLE trades DROP COLUMN IF EXISTS price_action_rating"
+        )
+        await db_conn.execute(
+            "ALTER TABLE trades DROP COLUMN IF EXISTS price_position"
+        )
+        # trade_mfe used to be its own table; drop it if it still exists
+        # from a previous schema version.
+        await db_conn.execute("DROP TABLE IF EXISTS trade_mfe")
         return
 
     await db_conn.execute(f"""
@@ -46,10 +56,6 @@ async def create_trades_table(db_conn: asyncpg.Connection) -> None:
             symbol               TEXT NOT NULL,
             date                 TIMESTAMPTZ NOT NULL,
             setup                TEXT,
-            intended_setup       TEXT,
-            observed_setup       TEXT[],
-            price_action_rating  INTEGER CHECK (price_action_rating BETWEEN 1 AND 5),
-            price_position       INTEGER,
             category             TEXT,
             notes                TEXT
         )
@@ -70,17 +76,13 @@ async def insert_trade(db_conn: asyncpg.Connection, payload: TradeCreate) -> Tra
     """Insert a new trade. Raises asyncpg.UniqueViolationError if (symbol, day) already exists."""
     row = await db_conn.fetchrow(
         """
-        INSERT INTO trades (symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
+        INSERT INTO trades (symbol, date, setup, category, notes)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING tradeid, symbol, date, setup, category, notes
         """,
         payload.symbol,
         payload.date,
         payload.setup,
-        payload.intended_setup,
-        payload.observed_setup,
-        payload.price_action_rating,
-        payload.price_position,
         payload.category,
         payload.notes,
     )
@@ -96,7 +98,7 @@ async def fetch_trades(
     if year is not None and month is not None:
         rows = await db_conn.fetch(
             f"""
-            SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
+            SELECT tradeid, symbol, date, setup, category, notes
             FROM trades
             WHERE EXTRACT(YEAR  FROM (date AT TIME ZONE '{settings.TIMEZONE}')) = $1
               AND EXTRACT(MONTH FROM (date AT TIME ZONE '{settings.TIMEZONE}')) = $2
@@ -107,7 +109,7 @@ async def fetch_trades(
     else:
         rows = await db_conn.fetch(
             """
-            SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
+            SELECT tradeid, symbol, date, setup, category, notes
             FROM trades
             ORDER BY date ASC
             """
@@ -126,7 +128,7 @@ async def fetch_trades_in_range(
     """
     rows = await db_conn.fetch(
         f"""
-        SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
+        SELECT tradeid, symbol, date, setup, category, notes
         FROM trades
         WHERE (date AT TIME ZONE '{settings.TIMEZONE}')::date BETWEEN $1::date AND $2::date
         ORDER BY date ASC
@@ -140,7 +142,7 @@ async def fetch_trades_in_range(
 async def fetch_trade_by_id(db_conn: asyncpg.Connection, tradeid: int) -> Trade:
     row = await db_conn.fetchrow(
         """
-        SELECT tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
+        SELECT tradeid, symbol, date, setup, category, notes
         FROM trades
         WHERE tradeid = $1
         """,
@@ -173,7 +175,7 @@ async def update_trade(
         UPDATE trades
         SET {", ".join(set_clauses)}
         WHERE tradeid = ${len(args)}
-        RETURNING tradeid, symbol, date, setup, intended_setup, observed_setup, price_action_rating, price_position, category, notes
+        RETURNING tradeid, symbol, date, setup, category, notes
     """
     row = await db_conn.fetchrow(sql, *args)
     if row is None:
@@ -221,27 +223,18 @@ async def insert_manual_trades(
     if not entries:
         return [], []
 
-    # Pre-normalise + dedupe in-memory so a duplicated row in the form
-    # doesn't waste a roundtrip — keep the first occurrence per (sym, day).
     seen: set[tuple[str, str]] = set()
     normalised: list[tuple[str, datetime]] = []
     in_memory_dupes: list[tuple[str, str]] = []
     for e in entries:
-        # Same canonicalisation as IB-sourced executions: trim, drop CFD
-        # 'n' suffix if present, uppercase. Manual entries shouldn't carry
-        # the suffix in practice but defensive normalisation keeps the
-        # (symbol, day) unique index consistent across sources.
         sym = normalize_symbol(e.symbol)
         if not sym:
-            # Skip empty symbols defensively — schema requires min_length=1
-            # so this is just belt-and-braces.
             continue
         key = (sym, e.date.isoformat())
         if key in seen:
             in_memory_dupes.append(key)
             continue
         seen.add(key)
-        # Midnight local-time, tz-aware → TIMESTAMPTZ.
         dt = datetime.combine(e.date, time(0, 0), tzinfo=ZoneInfo(settings.TIMEZONE))
         normalised.append((sym, dt))
 
@@ -260,13 +253,11 @@ async def insert_manual_trades(
                 INSERT INTO trades (symbol, date)
                 VALUES ($1, $2)
                 ON CONFLICT (symbol, ((date AT TIME ZONE $3)::date)) DO NOTHING
-                RETURNING tradeid, symbol, date, setup, intended_setup, observed_setup,
-                          price_action_rating, price_position, category, notes
+                RETURNING tradeid, symbol, date, setup, category, notes
                 """,
                 sym, dt, settings.TIMEZONE,
             )
             if row is None:
-                # Conflict — a trade for (sym, that local day) already exists.
                 day_iso = dt.astimezone(ZoneInfo(settings.TIMEZONE)).date().isoformat()
                 db_dupes.append((sym, day_iso))
                 logger.info(
@@ -295,11 +286,6 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
 
     Idempotent — re-running when every execution already has trade_fk set
     does nothing (returns trades_created=0, executions_linked=0).
-
-    Schema notes:
-      * executions.tradeid is IB's TEXT primary key (per-fill execution id).
-      * executions.trade_fk is the FK INTEGER to trades.tradeid (this column).
-      * executions.datetime is the fill timestamp (UTC TIMESTAMPTZ).
     """
     async with db_conn.transaction():
 
@@ -313,18 +299,13 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
             GROUP BY symbol, (datetime AT TIME ZONE '{settings.TIMEZONE}')::date
             ON CONFLICT (symbol, ((date AT TIME ZONE '{settings.TIMEZONE}')::date)) DO NOTHING
             RETURNING
-                tradeid, symbol, date, setup, intended_setup, observed_setup,
-                price_action_rating, price_position, category, notes
+                tradeid, symbol, date, setup, category, notes
             """
         )
         trades_created_rows = [Trade(**dict(r)) for r in created_rows]
         trades_created_ids = [t.tradeid for t in trades_created_rows]
         trades_created = len(trades_created_ids)
 
-        # Step 2: link unlinked executions to trades by (symbol, local-day).
-        # Skip currency-conversion executions for the same reason as above —
-        # we never want a EUR.USD execution to become linked to (and thus
-        # resurrect) an FX trade.
         link_status = await db_conn.execute(
             f"""
             UPDATE executions e
@@ -337,7 +318,6 @@ async def sync_trades_from_executions(db_conn: asyncpg.Connection) -> TradeSyncR
                   = (t.date     AT TIME ZONE '{settings.TIMEZONE}')::date
             """
         )
-        # asyncpg returns "UPDATE <count>"
         try:
             executions_linked = int(link_status.split()[-1])
         except (ValueError, IndexError):

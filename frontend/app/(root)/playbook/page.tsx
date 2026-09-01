@@ -7,7 +7,7 @@
  * (state persisted to localStorage per label). When expanded, the
  * section shows structured strategy notes and a 3-column grid of
  * 2-min charts for every trade where the setup appears in
- * observed_setup. Charts within a section lazy-load on scroll.
+ * setup. Charts within a section lazy-load on scroll.
  *
  * Page-level controls:
  *   • Window — 4w / 8w / 12w / 26w / 52w / All. Affects which trades

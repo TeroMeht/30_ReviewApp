@@ -35,7 +35,6 @@ import ChartStack from "@/components/trade-review/ChartStack";
 import DailyTradesTable from "@/components/trade-review/DailyTradesTable";
 import EditPanel from "@/components/trade-review/EditPanel";
 import ExecutionsTable from "@/components/trade-review/ExecutionsTable";
-import MfePanel from "@/components/trade-review/MfePanel";
 import ReviewHeader from "@/components/trade-review/ReviewHeader";
 import WeeklyTradesTable from "@/components/trade-review/WeeklyTradesTable";
 
@@ -197,11 +196,6 @@ function TradeReviewPageInner() {
           weekKey={trade.tradeid}
           onSelectTrade={handleSelectTrade}
         />
-      </div>
-
-      <div style={panel}>
-        <div style={panelHdr}>MFE — Maximum Favorable Excursion</div>
-        <MfePanel tradeid={trade.tradeid} executions={executions} />
       </div>
     </div>
   );

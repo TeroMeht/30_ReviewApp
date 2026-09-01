@@ -5,12 +5,6 @@
  * currently displayed trade. Ordered by each trade's earliest linked
  * execution timestamp (so the first ticker fired that day is at the
  * top). Clicking a row navigates the review page to that trade.
- *
- * Mirrors WeeklyTradesTable in style; backed by GET /api/trades/{id}/day.
- *
- * The header shows the day's total trade count, and the footer sums
- * realized P/L across every trade with linked executions so the user
- * can read the day's bottom line at a glance.
  */
 
 import { useEffect, useState } from "react";
@@ -29,8 +23,6 @@ function fmtDate(iso: string): string {
   });
 }
 
-/** Parse the Decimal-string P/L the backend serialises. Returns null for
- *  trades with no executions. */
 function parsePnl(value: string | null | undefined): number | null {
   if (value == null) return null;
   const n = Number(value);
@@ -39,8 +31,6 @@ function parsePnl(value: string | null | undefined): number | null {
 
 function fmtPnl(n: number): string {
   const sign = n >= 0 ? "+" : "−";
-  // Pin the locale so SSR and the browser produce the same string —
-  // `undefined` uses the runtime default and breaks hydration.
   const abs = Math.abs(n).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -115,25 +105,12 @@ export default function DailyTradesTable({
     );
   }
 
-  // Day-level aggregates. `tradesWithPnl` is the count of trades that
-  // actually have fills — used in the footer so the user knows the sum
-  // excludes manual-only rows. `totalExecs` sums the per-trade Execs
-  // column (each trade's count of distinct ibOrderIDs) so the header
-  // surfaces the day's overall order count alongside P/L.
   const totalTrades = trades.length;
   const pnls = trades
     .map((t) => parsePnl(t.realized_pnl))
     .filter((n): n is number => n !== null);
   const tradesWithPnl = pnls.length;
   const totalPnl = pnls.reduce((acc, n) => acc + n, 0);
-  // Sum of per-trade MFE potential PnL. Only trades that have a saved
-  // MFE config produce a non-null value; the rest are skipped so a
-  // partial coverage doesn't zero out the aggregate.
-  const potentials = trades
-    .map((t) => parsePnl(t.potential_pnl))
-    .filter((n): n is number => n !== null);
-  const tradesWithPotential = potentials.length;
-  const totalPotential = potentials.reduce((acc, n) => acc + n, 0);
   const totalExecs = trades.reduce(
     (acc, t) => acc + (t.execution_count ?? 0),
     0
@@ -165,26 +142,6 @@ export default function DailyTradesTable({
             </span>
           </span>
         )}
-        {tradesWithPotential > 0 && (
-          <span
-            title={
-              tradesWithPotential !== totalTrades
-                ? `${tradesWithPotential} of ${totalTrades} trade${totalTrades === 1 ? "" : "s"} have an MFE config`
-                : undefined
-            }
-          >
-            Day potential:{" "}
-            <span style={{ color: pnlColor(totalPotential), fontWeight: 700 }}>
-              {fmtPnl(totalPotential)}
-            </span>
-            {tradesWithPotential !== totalTrades && (
-              <span style={{ color: "#94a3b8", fontWeight: 400 }}>
-                {" "}
-                ({tradesWithPotential}/{totalTrades})
-              </span>
-            )}
-          </span>
-        )}
         <span>
           Total execs:{" "}
           <span style={{ color: "#0f172a", fontWeight: 600 }}>
@@ -199,20 +156,10 @@ export default function DailyTradesTable({
               <th style={th}>#</th>
               <th style={th}>Date</th>
               <th style={th}>Symbol</th>
-              <th style={th}>Setup (planned)</th>
-              <th style={th}>Intended (actual)</th>
-              <th style={th}>Observed</th>
+              <th style={th}>Setup</th>
               <th style={th}>Category</th>
-              <th style={{ ...th, textAlign: "center" }}>PA</th>
-              <th style={{ ...th, textAlign: "center" }}>PP</th>
               <th style={{ ...th, textAlign: "center" }}>Execs</th>
               <th style={{ ...th, textAlign: "right" }}>P/L</th>
-              <th
-                style={{ ...th, textAlign: "right" }}
-                title="MFE-based potential PnL. Requires a saved MFE config on the trade."
-              >
-                Potential
-              </th>
               <th style={th}>Notes</th>
             </tr>
           </thead>
@@ -220,14 +167,6 @@ export default function DailyTradesTable({
             {trades.map((t) => {
               const isCurrent = t.tradeid === currentTradeId;
               const pnl = parsePnl(t.realized_pnl);
-              const potential = parsePnl(t.potential_pnl);
-              // Highlight deviations (planned ≠ actual). Only flag when
-              // both columns are filled in to avoid lighting up rows
-              // that are simply unlabelled.
-              const deviation =
-                t.setup != null &&
-                t.intended_setup != null &&
-                t.setup !== t.intended_setup;
               return (
                 <tr
                   key={t.tradeid}
@@ -251,44 +190,7 @@ export default function DailyTradesTable({
                     {t.symbol}
                   </td>
                   <td style={td}>{t.setup ?? "—"}</td>
-                  <td
-                    style={{
-                      ...td,
-                      ...(deviation
-                        ? { color: "#b45309", fontWeight: 600 }
-                        : null),
-                    }}
-                    title={
-                      deviation
-                        ? `Deviation: planned "${t.setup}" → executed "${t.intended_setup}"`
-                        : undefined
-                    }
-                  >
-                    {deviation ? "⚠ " : ""}
-                    {t.intended_setup ?? "—"}
-                  </td>
-                  <td
-                    style={{
-                      ...td,
-                      color: "#475569",
-                      maxWidth: 240,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={(t.observed_setup ?? []).join(", ")}
-                  >
-                    {t.observed_setup && t.observed_setup.length > 0
-                      ? t.observed_setup.join(", ")
-                      : "—"}
-                  </td>
                   <td style={td}>{t.category ?? "—"}</td>
-                  <td style={{ ...td, textAlign: "center" }}>
-                    {t.price_action_rating ?? "—"}
-                  </td>
-                  <td style={{ ...td, textAlign: "center" }}>
-                    {t.price_position ?? "—"}
-                  </td>
                   <td
                     style={{
                       ...td,
@@ -339,22 +241,6 @@ export default function DailyTradesTable({
                   <td
                     style={{
                       ...td,
-                      textAlign: "right",
-                      fontVariantNumeric: "tabular-nums",
-                      color: pnlColor(potential),
-                      fontWeight: potential !== null ? 600 : 400,
-                    }}
-                    title={
-                      potential === null
-                        ? "No MFE config saved for this trade"
-                        : undefined
-                    }
-                  >
-                    {potential === null ? "—" : fmtPnl(potential)}
-                  </td>
-                  <td
-                    style={{
-                      ...td,
                       color: "#475569",
                       maxWidth: 320,
                       overflow: "hidden",
@@ -379,7 +265,7 @@ export default function DailyTradesTable({
               >
                 <td
                   style={{ ...td, fontWeight: 700, color: "#475569" }}
-                  colSpan={9}
+                  colSpan={5}
                 >
                   Day total ({totalTrades} trade{totalTrades === 1 ? "" : "s"}
                   {tradesWithPnl !== totalTrades
@@ -408,24 +294,6 @@ export default function DailyTradesTable({
                   }}
                 >
                   {fmtPnl(totalPnl)}
-                </td>
-                <td
-                  style={{
-                    ...td,
-                    textAlign: "right",
-                    fontVariantNumeric: "tabular-nums",
-                    color: tradesWithPotential > 0 ? pnlColor(totalPotential) : "#94a3b8",
-                    fontWeight: 700,
-                  }}
-                  title={
-                    tradesWithPotential === 0
-                      ? "No trades on this day have an MFE config saved"
-                      : tradesWithPotential !== totalTrades
-                      ? `${tradesWithPotential} of ${totalTrades} trades have an MFE config`
-                      : undefined
-                  }
-                >
-                  {tradesWithPotential > 0 ? fmtPnl(totalPotential) : "—"}
                 </td>
                 <td style={td} />
               </tr>

@@ -576,9 +576,7 @@ export default function DataManagementPage() {
                     <Th>Trade ID</Th>
                     <Th>Date</Th>
                     <Th>Symbol</Th>
-                    <Th>Setup (planned)</Th>
-                    <Th>Intended (actual)</Th>
-                    <Th>Observed</Th>
+                    <Th>Setup</Th>
                     <Th>Category</Th>
                   </tr>
                 </thead>
@@ -594,14 +592,6 @@ export default function DataManagementPage() {
                       <Td className="whitespace-nowrap">{fmtDate(t.date)}</Td>
                       <Td className="font-mono font-semibold">{t.symbol}</Td>
                       <Td className="text-slate-700">{t.setup ?? "—"}</Td>
-                      <Td className="text-slate-700">
-                        {t.intended_setup ?? "—"}
-                      </Td>
-                      <Td className="text-slate-700">
-                        {t.observed_setup && t.observed_setup.length > 0
-                          ? t.observed_setup.join(", ")
-                          : "—"}
-                      </Td>
                       <Td className="text-slate-700">{t.category ?? "—"}</Td>
                     </tr>
                   ))}

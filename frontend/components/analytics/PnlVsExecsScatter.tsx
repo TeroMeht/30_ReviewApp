@@ -222,7 +222,7 @@ export default function PnlVsExecsScatter({
 
   return (
     <div style={{ width }}>
-      {/* Compact text summary above the chart — mirrors WeeklyPnlChart
+      {/* Compact text summary above the chart — mirrors the other analytics charts
           and keeps the user oriented without a separate legend. */}
       <div
         style={{

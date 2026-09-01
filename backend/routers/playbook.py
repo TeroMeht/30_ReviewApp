@@ -2,19 +2,11 @@
 Playbook endpoints — per-setup study view + strategy notes.
 
 Backed by:
-  • trades.observed_setup (TEXT[]) — the universe of setup labels.
-    Trades may have multiple observed setups; each one contributes the
-    trade to that setup's bucket. We UNNEST the array to query.
+  • trades.setup (TEXT) — the setup label for the trade.
   • setup_playbook (one row per setup_label) — strategy notes.
 
 P/L formula and signed-quantity caveat are identical to the analytics
-module — see backend/routers/analytics.py module docstring.
-
-Window semantics:
-  ``weeks=N`` restricts to the last N Mon–Sun Helsinki weeks,
-  matching the analytics endpoints. ``weeks`` omitted means "all
-  time" — the Playbook page exposes an 'All' pill that calls the
-  endpoint without the parameter.
+module.
 """
 
 from datetime import date, datetime, timedelta
@@ -48,9 +40,7 @@ router = APIRouter(
 
 
 def _window_start(weeks: Optional[int]) -> Optional[date]:
-    """Convert a weeks window to a Helsinki-local Monday cutoff date.
-    Returns None for weeks=None (the 'all time' case) so the SQL can
-    skip the date filter entirely."""
+    """Convert a weeks window to a Helsinki-local Monday cutoff date."""
     if weeks is None:
         return None
     today_local = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
@@ -66,44 +56,32 @@ async def list_playbook_setups(
     ),
     db_conn=Depends(get_db_conn),
 ) -> PlaybookSetupsResponse:
-    """List every setup label that appears in observed_setup within the
-    requested window, with trade count and total realised P/L.
-
-    Sorted by trade_count desc so the most-observed setup is at the top
-    (matches the page's 'most observed first' ordering). Setups with
-    saved notes but no trades in the window are NOT returned — the page
-    intentionally hides empty sections; switching the window selector
-    to 'All' brings them back.
-    """
+    """List every setup label in trades.setup within the requested window,
+    with trade count and total realised P/L. Sorted by trade_count desc."""
     start_monday = _window_start(weeks)
 
-    # Two-stage: per-trade P/L first (so a trade with 5 fills counts
-    # once), then UNNEST observed_setup and aggregate per label. A trade
-    # with N observed setups contributes its full P/L to each — the
-    # Playbook is a study view, not an attribution model.
     if start_monday is None:
         sql = f"""
             WITH trade_stats AS (
                 SELECT
                     t.tradeid,
-                    t.observed_setup,
+                    t.setup AS setup_label,
                     (
                         COALESCE(SUM(-e.quantity * e.tradeprice), 0)
                         + COALESCE(SUM(e.ibcommission), 0)
                     )::numeric AS pnl
                 FROM trades t
                 JOIN executions e ON e.trade_fk = t.tradeid
-                WHERE t.observed_setup IS NOT NULL
-                  AND array_length(t.observed_setup, 1) > 0
-                GROUP BY t.tradeid, t.observed_setup
+                WHERE t.setup IS NOT NULL
+                GROUP BY t.tradeid, t.setup
             )
             SELECT
-                label              AS setup_label,
+                setup_label,
                 COUNT(*)::int      AS trade_count,
                 SUM(pnl)::numeric  AS total_pnl
-            FROM trade_stats, UNNEST(observed_setup) AS label
-            GROUP BY label
-            ORDER BY trade_count DESC, label ASC
+            FROM trade_stats
+            GROUP BY setup_label
+            ORDER BY trade_count DESC, setup_label ASC
         """
         rows = await db_conn.fetch(sql)
     else:
@@ -111,7 +89,7 @@ async def list_playbook_setups(
             WITH trade_stats AS (
                 SELECT
                     t.tradeid,
-                    t.observed_setup,
+                    t.setup AS setup_label,
                     (
                         COALESCE(SUM(-e.quantity * e.tradeprice), 0)
                         + COALESCE(SUM(e.ibcommission), 0)
@@ -119,17 +97,16 @@ async def list_playbook_setups(
                 FROM trades t
                 JOIN executions e ON e.trade_fk = t.tradeid
                 WHERE (t.date AT TIME ZONE '{settings.TIMEZONE}')::date >= $1::date
-                  AND t.observed_setup IS NOT NULL
-                  AND array_length(t.observed_setup, 1) > 0
-                GROUP BY t.tradeid, t.observed_setup
+                  AND t.setup IS NOT NULL
+                GROUP BY t.tradeid, t.setup
             )
             SELECT
-                label              AS setup_label,
+                setup_label,
                 COUNT(*)::int      AS trade_count,
                 SUM(pnl)::numeric  AS total_pnl
-            FROM trade_stats, UNNEST(observed_setup) AS label
-            GROUP BY label
-            ORDER BY trade_count DESC, label ASC
+            FROM trade_stats
+            GROUP BY setup_label
+            ORDER BY trade_count DESC, setup_label ASC
         """
         rows = await db_conn.fetch(sql, start_monday)
 
@@ -162,14 +139,7 @@ async def list_playbook_trades_for_setup(
     ),
     db_conn=Depends(get_db_conn),
 ) -> PlaybookTradesResponse:
-    """Trades observed under a given setup label, newest first.
-
-    Filter is ``label = ANY(t.observed_setup)`` — exact-match (no
-    casing/whitespace normalisation) to mirror the rest of the app.
-    Trades with no executions are excluded (no P/L to display on the
-    chart card). Returns ``observed_setup`` in full so the frontend can
-    render the '+ other observed setups' chip.
-    """
+    """Trades with the given setup label, newest first."""
     start_monday = _window_start(weeks)
 
     base_select = f"""
@@ -178,15 +148,13 @@ async def list_playbook_trades_for_setup(
             t.symbol,
             t.date,
             t.setup,
-            t.intended_setup,
-            t.observed_setup,
             (
                 COALESCE(SUM(-e.quantity * e.tradeprice), 0)
                 + COALESCE(SUM(e.ibcommission), 0)
             )::numeric AS realized_pnl
         FROM trades t
         JOIN executions e ON e.trade_fk = t.tradeid
-        WHERE $1 = ANY(t.observed_setup)
+        WHERE t.setup = $1
     """
     group_order = """
         GROUP BY t.tradeid
@@ -208,8 +176,6 @@ async def list_playbook_trades_for_setup(
             symbol=r["symbol"],
             date=r["date"],
             setup=r["setup"],
-            intended_setup=r["intended_setup"],
-            observed_setup=list(r["observed_setup"]) if r["observed_setup"] else None,
             realized_pnl=(
                 Decimal(r["realized_pnl"])
                 if r["realized_pnl"] is not None
@@ -237,10 +203,7 @@ async def get_playbook_notes(
     label: str,
     db_conn=Depends(get_db_conn),
 ) -> PlaybookNotes:
-    """Read the strategy notes for a setup label. Returns an empty
-    PlaybookNotes (all fields blank) if no row exists yet — the
-    frontend can then render an empty editor without special-casing
-    'never written about' setups."""
+    """Read the strategy notes for a setup label."""
     row = await db_conn.fetchrow(
         """
         SELECT setup_label, description, entry_rules, exit_rules,
@@ -264,21 +227,10 @@ async def upsert_playbook_notes(
     body: PlaybookNotesUpdate,
     db_conn=Depends(get_db_conn),
 ) -> PlaybookNotes:
-    """Upsert structured notes for a setup label.
-
-    Sent fields overwrite; omitted fields keep their existing values
-    (PATCH-style semantics). On insert (first time writing notes for a
-    label) omitted fields default to empty string per the table DDL.
-    Returns the post-write row so the client can update its local state
-    without a follow-up GET.
-    """
+    """Upsert structured notes for a setup label."""
     if not label.strip():
         raise HTTPException(status_code=400, detail="Label cannot be empty.")
 
-    # Pull existing row so the COALESCE in the UPSERT can keep
-    # unchanged fields. asyncpg rejects None-as-keep on INSERT (the
-    # NOT NULL DEFAULT '' would still fire, but we'd lose existing
-    # values), so we resolve the merge in Python and write the full row.
     existing = await db_conn.fetchrow(
         "SELECT description, entry_rules, exit_rules, common_mistakes, examples "
         "FROM setup_playbook WHERE setup_label = $1",
