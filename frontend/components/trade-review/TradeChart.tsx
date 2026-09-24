@@ -390,6 +390,39 @@ export default function TradeChart({
             title: "1",
           });
         }
+
+        // Speed-of-move reference bands:
+        //   0    -- zero speed (no move since anchor)
+        //   0.20 -- ceiling of the "grind" regime (skip trades below)
+        //   0.40 -- floor of the "capitulation zone" (real setups above)
+        // Same visual weight as Relatr's ±0.45 lines so the panes read
+        // as one system.
+        if (ind.name === "speed") {
+          series.createPriceLine({
+            price: 0,
+            color: "#000000",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: !hideLastValueLabels,
+            title: "0",
+          });
+          series.createPriceLine({
+            price: 0.2,
+            color: "#000000",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: !hideLastValueLabels,
+            title: "grind 0.20",
+          });
+          series.createPriceLine({
+            price: 0.4,
+            color: "#000000",
+            lineWidth: 1,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: !hideLastValueLabels,
+            title: "capit. 0.40",
+          });
+        }
       } else {
         entry.series.applyOptions({ color });
       }
@@ -412,8 +445,9 @@ export default function TradeChart({
     // not absolute pixels. Default stretch is auto-assigned and ends up
     // heavily favouring the price pane, which leaves the Relatr pane
     // barely visible. Force a proportional split:
-    //   price : relatr : rvol  =  4 : 2 : 1
-    // (i.e. Relatr is half the price-pane height, Rvol is half of Relatr).
+    //   price : relatr : rvol : speed  =  4 : 2 : 1 : 2
+    // (Relatr is half the price-pane height, Rvol is half of Relatr,
+    // Speed matches Relatr so the 0-0.2-0.4 bands stay readable.)
     const panes = chart.panes();
     if (panes.length >= 1) {
       try {
@@ -432,6 +466,13 @@ export default function TradeChart({
     if (panes.length >= 3) {
       try {
         panes[2].setStretchFactor(1); // Rvol
+      } catch {
+        /* ignore */
+      }
+    }
+    if (panes.length >= 4) {
+      try {
+        panes[3].setStretchFactor(2); // Speed
       } catch {
         /* ignore */
       }

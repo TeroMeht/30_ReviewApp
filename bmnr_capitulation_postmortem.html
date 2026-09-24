@@ -1,0 +1,718 @@
+<title>BMNR Capitulation Postmortem</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    /* Light theme — analyst's paper */
+    --bg: #f6f4ee;
+    --bg-elev: #ffffff;
+    --bg-rule: #e8e2d2;
+    --ink: #1a1613;
+    --ink-2: #4a423a;
+    --ink-3: #7a7168;
+    --accent: #a05a1e;         /* burnt amber */
+    --accent-soft: #f5e6d3;
+    --bull: #147a3a;
+    --bear: #b6301a;
+    --violet: #5b3fb6;
+    --code-bg: #efeadc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12100e;
+      --bg-elev: #1c1915;
+      --bg-rule: #2a2622;
+      --ink: #efe6d4;
+      --ink-2: #c9bfad;
+      --ink-3: #8c8375;
+      --accent: #e8a457;
+      --accent-soft: #3a2a17;
+      --bull: #4ec97a;
+      --bear: #ef6a55;
+      --violet: #a892e8;
+      --code-bg: #24201c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12100e;
+    --bg-elev: #1c1915;
+    --bg-rule: #2a2622;
+    --ink: #efe6d4;
+    --ink-2: #c9bfad;
+    --ink-3: #8c8375;
+    --accent: #e8a457;
+    --accent-soft: #3a2a17;
+    --bull: #4ec97a;
+    --bear: #ef6a55;
+    --violet: #a892e8;
+    --code-bg: #24201c;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    font-feature-settings: "ss01", "cv02";
+  }
+  .page {
+    max-width: 880px;
+    margin: 0 auto;
+    padding-inline: 24px;
+    padding-block: 48px 96px;
+  }
+
+  /* --- Masthead --- */
+  .mast {
+    border-top: 3px solid var(--ink);
+    border-bottom: 1px solid var(--bg-rule);
+    padding-block: 20px 16px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px 24px;
+    align-items: end;
+  }
+  .mast-eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .mast-title {
+    font-family: "IBM Plex Serif", serif;
+    font-weight: 600;
+    font-size: clamp(30px, 5vw, 44px);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 6px 0 0;
+  }
+  .mast-title em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  .mast-meta {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    color: var(--ink-3);
+    text-align: right;
+    line-height: 1.5;
+  }
+  .mast-meta strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* --- Trade card strip --- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--bg-rule);
+    border: 1px solid var(--bg-rule);
+    margin-block: 32px;
+  }
+  .stat {
+    background: var(--bg-elev);
+    padding: 14px 16px;
+  }
+  .stat-label {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: block;
+  }
+  .stat-value {
+    font-family: "IBM Plex Serif", serif;
+    font-weight: 600;
+    font-size: 22px;
+    font-variant-numeric: tabular-nums;
+    margin-top: 4px;
+    letter-spacing: -0.01em;
+  }
+  .stat-value.bear { color: var(--bear); }
+  .stat-value.bull { color: var(--bull); }
+  .stat-sub {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    margin-top: 2px;
+  }
+
+  /* --- Sections --- */
+  section {
+    margin-block-start: 56px;
+  }
+  .section-num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+  h2 {
+    font-family: "IBM Plex Serif", serif;
+    font-weight: 600;
+    font-size: 26px;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+    margin: 8px 0 20px;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+    margin: 28px 0 10px;
+  }
+  p { margin: 0 0 14px; color: var(--ink-2); max-width: 65ch; }
+  p strong { color: var(--ink); font-weight: 600; }
+  .lead { font-size: 17px; line-height: 1.55; color: var(--ink); max-width: 62ch; }
+  .lead:first-letter {
+    font-family: "IBM Plex Serif", serif;
+    font-weight: 600;
+    float: left;
+    font-size: 3.4em;
+    line-height: 0.9;
+    padding: 4px 10px 0 0;
+    color: var(--accent);
+  }
+
+  /* --- Chart figure --- */
+  .figure {
+    margin-block: 28px;
+    border: 1px solid var(--bg-rule);
+    background: #ffffff;
+    padding: 12px;
+  }
+  .figure img { display: block; width: 100%; height: auto; }
+  .figure-cap {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+    margin-top: 8px;
+    padding-inline: 4px;
+  }
+
+  /* --- Timeline for the 5-stage capitulation --- */
+  .timeline {
+    display: grid;
+    gap: 0;
+    margin-block: 24px;
+    border-top: 1px solid var(--bg-rule);
+  }
+  .step {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 24px;
+    padding-block: 22px;
+    border-bottom: 1px solid var(--bg-rule);
+    align-items: start;
+  }
+  .step-tag {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: var(--ink-3);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    line-height: 1.5;
+  }
+  .step-tag .num {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--bg-elev);
+    padding: 2px 7px;
+    font-weight: 600;
+    margin-right: 6px;
+  }
+  .step-time {
+    display: block;
+    color: var(--ink);
+    font-weight: 600;
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .step-body h4 {
+    font-family: "IBM Plex Serif", serif;
+    font-weight: 600;
+    font-size: 19px;
+    margin: 0 0 6px;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+  }
+  .step-body p { margin: 0 0 8px; }
+  .step-body ul { margin: 0; padding-left: 18px; color: var(--ink-2); }
+  .step-body li { margin-block: 4px; }
+  .step.climax .step-tag .num { background: var(--bear); }
+  .step.turn .step-tag .num { background: var(--bull); }
+
+  /* --- Data table --- */
+  .table-wrap { overflow-x: auto; margin-block: 20px; border: 1px solid var(--bg-rule); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    min-width: 520px;
+  }
+  th, td {
+    padding: 10px 14px;
+    text-align: right;
+    border-bottom: 1px solid var(--bg-rule);
+  }
+  th:first-child, td:first-child { text-align: left; }
+  thead th {
+    background: var(--code-bg);
+    font-weight: 600;
+    color: var(--ink);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.hi { color: var(--bear); font-weight: 600; }
+  td.emph { color: var(--ink); font-weight: 600; }
+
+  /* --- Callout / detector spec --- */
+  .spec {
+    background: var(--bg-elev);
+    border: 1px solid var(--bg-rule);
+    border-left: 3px solid var(--accent);
+    padding: 20px 24px;
+    margin-block: 20px;
+  }
+  .spec h4 {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 12px 0 6px;
+  }
+  .spec h4:first-child { margin-top: 0; }
+  .spec ul { margin: 4px 0 6px; padding-left: 20px; color: var(--ink-2); }
+  .spec li { margin-block: 3px; font-size: 14px; }
+  .spec code {
+    background: var(--code-bg);
+    padding: 1px 6px;
+    font-size: 12.5px;
+    color: var(--ink);
+    border-radius: 2px;
+  }
+
+  .formula {
+    background: var(--code-bg);
+    padding: 14px 18px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    color: var(--ink);
+    border-left: 2px solid var(--accent);
+    margin-block: 14px;
+    overflow-x: auto;
+  }
+
+  .pullquote {
+    font-family: "IBM Plex Serif", serif;
+    font-style: italic;
+    font-size: 20px;
+    line-height: 1.4;
+    color: var(--ink);
+    border-inline-start: 3px solid var(--accent);
+    padding-inline-start: 20px;
+    margin: 24px 0;
+    max-width: 30em;
+    text-wrap: balance;
+  }
+
+  ul.plain { padding-left: 20px; color: var(--ink-2); }
+  ul.plain li { margin-block: 6px; }
+  ul.plain li strong { color: var(--ink); }
+
+  /* Sources */
+  .sources {
+    margin-top: 72px;
+    padding-top: 20px;
+    border-top: 1px solid var(--bg-rule);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+  .sources a { color: var(--accent); text-decoration: underline dotted; text-underline-offset: 3px; }
+  .sources h4 {
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: 11px;
+    color: var(--ink-3);
+    margin: 0 0 10px;
+  }
+  .sources ul { list-style: none; padding: 0; margin: 0; }
+  .sources li { margin-block: 6px; }
+
+  /* Colophon */
+  .colophon {
+    margin-top: 40px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-top: 1px solid var(--bg-rule);
+    padding-top: 14px;
+  }
+
+  @media (max-width: 560px) {
+    .step { grid-template-columns: 1fr; gap: 8px; }
+    .step-tag { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .step-tag .num { margin: 0; }
+    .step-time { margin: 0; }
+    .mast { grid-template-columns: 1fr; }
+    .mast-meta { text-align: left; }
+    .lead:first-letter { font-size: 3em; }
+  }
+</style>
+
+<div class="page">
+
+  <!-- Masthead -->
+  <header class="mast">
+    <div>
+      <div class="mast-eyebrow">Trade Postmortem &nbsp;·&nbsp; Reversal Long &nbsp;·&nbsp; A+</div>
+      <h1 class="mast-title">BMNR, and the <em>anatomy</em> of a capitulation</h1>
+    </div>
+    <div class="mast-meta">
+      <strong>Trade #471</strong><br>
+      2026-09-15 (Tue)<br>
+      Tape: NYSE · BitMine Immersion
+    </div>
+  </header>
+
+  <!-- Stats strip -->
+  <div class="stats">
+    <div class="stat">
+      <span class="stat-label">Day low</span>
+      <div class="stat-value bear">$22.99</div>
+      <div class="stat-sub">−14.8% from swing high</div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Peak relATR</span>
+      <div class="stat-value">0.59</div>
+      <div class="stat-sub">threshold 0.45 breached at 14:44 ET</div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Climax bar volume</span>
+      <div class="stat-value">1.11 M</div>
+      <div class="stat-sub">7.6× pre-flush avg (2-min bar)</div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Flush window</span>
+      <div class="stat-value">10 min</div>
+      <div class="stat-sub">relATR≥0.45 → reversal candle</div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Reversal close</span>
+      <div class="stat-value bull">$23.70</div>
+      <div class="stat-sub">14:54 ET · +3.1% off low</div>
+    </div>
+  </div>
+
+  <p class="lead">This was not a trend reversal. It was a stop cascade. The whole trade lives inside a ten-minute window on the 2-minute chart, and every piece of it — the daily posture, the pre-market fade, the 30-minute pivot getting sliced, the climax bar, the volume dropping on the recovery — is textbook capitulation geometry. Recognizing it in real time is the point of this write-up.</p>
+
+  <!-- Chart -->
+  <figure class="figure">
+    <img src="bmnr_capitulation_deep_dive.png" alt="Four-panel BMNR chart: daily, 30-min, 2-min RTH, and stacked volume + relATR + EMA9 slope indicators.">
+    <div class="figure-cap">Fig. 1 — Daily 60d · 30-min two-week · 2-min RTH trade day · Volume · relATR · EMA9 slope + ROC.</div>
+  </figure>
+
+  <!-- Section 1: Macro -->
+  <section>
+    <div class="section-num">01 / Macro theme</div>
+    <h2>An Ethereum treasury bleeding into a rates + regulatory event window</h2>
+
+    <p>BMNR is BitMine Immersion — an Ethereum treasury vehicle holding ~5.96M ETH tokens. It moves in step with ETH. On this day the tape was hostile in a very <em>specific</em> way, which is what mattered for the setup: the 10-year Treasury yield poked above <strong>5.0%</strong> — highest since 2007 — Bitcoin lost <strong>$77,000</strong>, and Ethereum slid to <strong>$2,476</strong> ahead of a Senate vote on the CLARITY Act. The Fed decision was queued for the next morning.</p>
+
+    <p>None of that is a "sell BMNR forever" story. It is exactly the <em>forced-selling-into-an-event</em> backdrop that produces capitulation lows in leveraged crypto proxies without breaking their underlying trend. The condition sets the trade.</p>
+  </section>
+
+  <!-- Section 2: Daily -->
+  <section>
+    <div class="section-num">02 / Daily posture</div>
+    <h2>Extended, but only moderately — the pullback had somewhere to go</h2>
+
+    <p>From the June 22 low near $13, BMNR ran roughly 2× and closed 09-14 at <strong>$25.76</strong>, sitting <strong>+16.0%</strong> above SMA200 and only <strong>+4.3%</strong> above daily EMA9. Trend was extended enough to attract a pullback, not so extended that only a top would resolve it.</p>
+
+    <p>The tell was 09-11: <strong>51M shares</strong>, a +10.7% intraday range that closed red at the swing high — a churn/bearish-engulf that logged supply and printed the reference $26.97 swing high. 09-14 tried to rally back but failed at $25.97. So on the trade day the daily EMA9 was rising at ~$24.70 (magnet directly beneath price), SMA200 was rising at $22.19 (ultimate downside guardrail), and the supply top from four sessions earlier framed the ceiling.</p>
+
+    <p>The trade day's daily bar (24.59 / 24.71 / <strong>22.99</strong> / 23.60) was a <em>0.8× ATR undercut of daily EMA9</em> — deep enough to shake weak hands, shallow enough that SMA200 was never threatened. Classic pullback-in-uptrend geometry.</p>
+  </section>
+
+  <!-- Section 3: Pre-market -->
+  <section>
+    <div class="section-num">03 / Pre-market</div>
+    <h2>Sellers in control, but the ammunition still loaded</h2>
+
+    <ul class="plain">
+      <li><strong>Open</strong> — $24.77 (−3.85% gap from $25.76 prior close).</li>
+      <li><strong>First 10 min</strong> — sharp dip 24.77 → 24.35, then base built.</li>
+      <li><strong>Fade attempt</strong> — 11:10 → 13:50 Kiev drifted price up to $24.93 (bullish gap-fill effort).</li>
+      <li><strong>Late fail</strong> — rolled 24.93 → 24.47 into RTH open. Momentum flipped negative in the final 30 min.</li>
+      <li><strong>Volume</strong> — 1.54 M shares. Elevated, not climactic.</li>
+    </ul>
+
+    <p class="pullquote">Pre-market wasn't the capitulation. It signaled sellers had control but left the reservoir of trapped longs above — the necessary condition for a mid-session flush.</p>
+  </section>
+
+  <!-- Section 4: The Sliced Low -->
+  <section>
+    <div class="section-num">04 / 30-min structure</div>
+    <h2>The pivot low that got sliced in a single impulse</h2>
+
+    <p>The nearest visible 30-min swing low was <strong>$23.36</strong> — the first RTH bar low from 09-10, the little washout that preceded the 09-11 breakout. Everything from Sep 8 through Sep 14 held above $24.12. That $23.36 was the obvious stop level.</p>
+
+    <p>On the trade day, the 30-min bar at 14:30 ET printed a low of <strong>$22.99</strong> — $0.37 (−1.6%) below the pivot, right on top of the 09-02 base at $22.81–23.00. Two features of the slice made the trade:</p>
+
+    <ul class="plain">
+      <li><strong>The slice was uninterrupted.</strong> On the 2-min chart the descent from 21:36 Kiev onward has almost no wicks — that's stop cascade, not natural selling.</li>
+      <li><strong>It landed on old demand.</strong> The 09-02 shelf caught it on the same candle it printed the low. A slice that pauses at <em>no</em> structure keeps going; a slice that instantly meets old demand is the one that reverses.</li>
+    </ul>
+  </section>
+
+  <!-- Section 5: Timeline of the 2-min flush -->
+  <section>
+    <div class="section-num">05 / Timeline · 2-min anatomy</div>
+    <h2>Six stages of a stop cascade, in ten minutes</h2>
+
+    <div class="timeline">
+      <div class="step">
+        <div class="step-tag"><span class="num">00</span>Grind<span class="step-time">16:38 → 21:28 ET</span></div>
+        <div class="step-body">
+          <h4>The "normal" — what to distinguish from</h4>
+          <p>Controlled walk under EMA9 and VWAP, $24.71 → $24.00. relATR oscillates 0.0–0.3. Per-bar volume 60–200k. EMA9 5-bar slope near zero. Even distribution. This is the pattern you do <em>not</em> take.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-tag"><span class="num">01</span>Pressure<span class="step-time">21:36 · 14:36 ET</span></div>
+        <div class="step-body">
+          <h4>The first shot across the bow</h4>
+          <p><strong>526k</strong> volume bar, <strong>4.9×</strong> the trailing 20-bar mean. ROC(20-min) turns to −0.96%. You don't buy it — you tag the tape: <em>something changed</em>.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-tag"><span class="num">02</span>Accel<span class="step-time">21:40 → 21:42 · 14:40–14:42 ET</span></div>
+        <div class="step-body">
+          <h4>Slope goes non-linear</h4>
+          <p>Two bars with 509k / 733k volume. ROC(20-min) −1.6% → −2.0%. EMA9 slope −0.19 → −0.24. Ten of the last twelve bars are red. relATR: 0.31 → 0.37. Still under threshold — but the second derivative of the slope is now positive-negative.</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-tag"><span class="num">03</span>Breach<span class="step-time">21:44 · 14:44 ET</span></div>
+        <div class="step-body">
+          <h4>relATR crosses 0.45 — arm the trigger</h4>
+          <p>ROC5 = −2.67%. EMA9 5-bar slope = −0.32. This is the "over-extended" bell. Trade goes from <em>watching</em> to <em>armed</em>.</p>
+        </div>
+      </div>
+
+      <div class="step climax">
+        <div class="step-tag"><span class="num">04</span>Climax<span class="step-time">21:46 · 14:46 ET</span></div>
+        <div class="step-body">
+          <h4>The one bar that names the whole event</h4>
+          <p><strong>1.113 M shares on a single 2-min bar</strong> — 4.4× trailing average and the largest print of the RTH session. relATR 0.52, EMA9 slope −0.38, ROC(20-min) −3.58%. Everyone who was going to sell sold here. Climactic volume typically shows up on the <em>second-to-last</em> down bar, not the low bar.</p>
+        </div>
+      </div>
+
+      <div class="step climax">
+        <div class="step-tag"><span class="num">05</span>Exhaust<span class="step-time">21:48 · 14:48 ET</span></div>
+        <div class="step-body">
+          <h4>Low, high water mark, first divergence</h4>
+          <p>975k volume — lower than the climax bar. That drop is the first signal. relATR peaks at <strong>0.59</strong>. Low $22.99. Slice complete.</p>
+        </div>
+      </div>
+
+      <div class="step turn">
+        <div class="step-tag"><span class="num">06</span>Absorb<span class="step-time">21:50 · 14:50 ET</span></div>
+        <div class="step-body">
+          <h4>A tell hiding in the tape</h4>
+          <p>Opens at low $23.00, closes $23.25. <strong>867k on a lower close is impossible without buyer absorption.</strong> Wick sitting on the day low. This is the shape of a capitulation-with-reversal bar.</p>
+        </div>
+      </div>
+
+      <div class="step turn">
+        <div class="step-tag"><span class="num">07</span>Trigger<span class="step-time">21:54 · 14:54 ET</span></div>
+        <div class="step-body">
+          <h4>Reversal candle — buy this bar</h4>
+          <p>523k volume — 47% of climax. Close $23.70 above the prior two bars' highs. EMA9 5-bar slope halves from −0.44 → −0.22. Every rule the detector wants is satisfied simultaneously.</p>
+        </div>
+      </div>
+    </div>
+
+    <p><em>Total elapsed:</em> from the first over-extended print at 21:44 to the confirmed reversal candle at 21:54 is <strong>ten minutes / five 2-min bars</strong>. That is the entire trade window.</p>
+  </section>
+
+  <!-- Section 6: Volume profile -->
+  <section>
+    <div class="section-num">06 / Volume profile</div>
+    <h2>Shape matters more than magnitude</h2>
+
+    <p>The characteristic profile is <strong>flat → ramp → single explosive bar → contraction on the reversal</strong>. If the reversal bar has volume equal to or greater than the climax bar, that is continuation, not reversal. The 21:54 candle used 47% of the climax bar's volume — a textbook exhaustion signature.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>Bars</th>
+            <th>Total vol</th>
+            <th>Avg / bar</th>
+            <th>vs pre-flush</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Pre-flush grind &nbsp; <span style="color:var(--ink-3)">16:30–21:30</span></td>
+            <td>150</td>
+            <td>22.0 M</td>
+            <td>147 k</td>
+            <td>1.0×</td>
+          </tr>
+          <tr>
+            <td class="emph">Capitulation window &nbsp; <span style="color:var(--ink-3)">21:30–21:56</span></td>
+            <td>14</td>
+            <td>7.25 M</td>
+            <td class="hi">518 k</td>
+            <td class="hi">3.5×</td>
+          </tr>
+          <tr>
+            <td class="emph">Peak climax bar &nbsp; <span style="color:var(--ink-3)">21:46</span></td>
+            <td>1</td>
+            <td>1.11 M</td>
+            <td class="hi">1.11 M</td>
+            <td class="hi">7.6×</td>
+          </tr>
+          <tr>
+            <td>Post-reversal recovery &nbsp; <span style="color:var(--ink-3)">21:56–23:00</span></td>
+            <td>31</td>
+            <td>9.0 M</td>
+            <td>291 k</td>
+            <td>2.0×</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Section 7: EMA9 slope -->
+  <section>
+    <div class="section-num">07 / EMA9 slope decomposition</div>
+    <h2>The rate of change of the rate is the signal</h2>
+
+    <p>Track the EMA9 5-bar difference from the moment price closes back below EMA9 coming from above (here 21:32, close $23.90 vs EMA9 $24.03). The trajectory:</p>
+
+    <div class="formula">
+Δema9(5):&nbsp; 0.00 → −0.02 → −0.07 → −0.12 → −0.19 → −0.24 → −0.32 → −0.38 → <b>−0.45</b> (trough @21:48)
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ −0.44 → −0.36 → −0.22 → −0.05 → <b>+0.13</b> (positive @21:58)
+    </div>
+
+    <p>The rule this yields is portable across setups: <strong>the 5-bar EMA9 slope becomes monotonically more negative for 5+ consecutive bars, then reverses.</strong> In a normal grind, the slope stays in a band of −0.05 to −0.10 and does not accelerate. In capitulation, each 2-min bar makes the slope 20–30% more negative than the previous.</p>
+
+    <p>The <strong>second derivative</strong> (bar-over-bar change of slope) hits its max positive value one bar <em>before</em> price reverses. Δslope reads +0.01 at 21:50, +0.08 at 21:52, +0.14 at 21:54. That is the real-time "the fall is decelerating" signal.</p>
+  </section>
+
+  <!-- Section 8: Detector spec -->
+  <section>
+    <div class="section-num">08 / Real-time detector</div>
+    <h2>A four-stage state machine</h2>
+
+    <div class="spec">
+      <h4>Prime · all true</h4>
+      <ul>
+        <li>Daily close &gt; SMA200 by ≥ 5% and daily EMA9 rising</li>
+        <li>Prior daily close was above daily EMA9</li>
+        <li>Today's 2-min close has broken below intraday EMA9 for ≥ 3 consecutive bars</li>
+        <li>A visible 30-min or daily pivot low exists 3–8% below current price</li>
+      </ul>
+
+      <h4>Arm · 2 of 3</h4>
+      <ul>
+        <li><code>vol_ratio</code> (bar / trailing-20 mean) &gt; 3.0</li>
+        <li>Change in EMA9 5-bar slope over last 3 bars &lt; −0.05 (accelerating downward)</li>
+        <li>ROC over last 10 bars &lt; −1.5%</li>
+      </ul>
+
+      <h4>Fire flag · "capitulation is happening now"</h4>
+      <ul>
+        <li>relATR ≥ 0.45</li>
+        <li>Climactic volume bar: <code>vol_ratio ≥ 3×</code> AND highest 2-min volume of the session so far</li>
+        <li>ROC(10-bar) ≤ −2.5%</li>
+        <li>Price extended ≥ 0.8× ATR below VWAP</li>
+      </ul>
+
+      <h4>Trigger · buy this bar, all of</h4>
+      <ul>
+        <li>Prior bar was fire-flag = true</li>
+        <li>Current bar volume is 40–90% of the fire-flag bar</li>
+        <li>Current close &gt; prior bar high</li>
+        <li>Current close in upper 40% of the current bar range</li>
+        <li>EMA9 5-bar slope is less negative than previous bar's slope (Δ² &gt; 0)</li>
+        <li>relATR has contracted ≥ 20% from its peak</li>
+      </ul>
+    </div>
+
+    <p>The 09-15 BMNR trade satisfies every one of these at 21:54 Kiev / 14:54 ET. Run the framework against your other Reversal-Long tags and it should flag the A / A+ setups and reject the days that grind without accelerating.</p>
+  </section>
+
+  <!-- Section 9: Single-scalar detector -->
+  <section>
+    <div class="section-num">09 / One scalar alert</div>
+    <h2>Capitulation score</h2>
+
+    <p>For a single-value real-time alert, combine three z-scores on rolling 20-bar windows:</p>
+
+    <div class="formula">
+capitulation_score&nbsp;=&nbsp;z(vol_ratio)&nbsp;+&nbsp;z(|EMA9_slope5|)&nbsp;+&nbsp;z(relatr)
+    </div>
+
+    <p>On 09-15 this score would have crossed <strong>~6.0 at 21:46</strong> — the climax bar. A threshold rarely reached except on these setups. Add the trigger-bar condition on the <em>next</em> bar and you have an end-to-end automated detector.</p>
+  </section>
+
+  <!-- Section 10: Mental model -->
+  <section>
+    <div class="section-num">10 / Mental model</div>
+    <h2>Grind vs. capitulation, in one sentence each</h2>
+
+    <p><strong>A grind is linear</strong> — constant slope, constant volume, no relATR expansion. Sellers are patient. Every bar looks like the previous bar.</p>
+
+    <p><strong>A capitulation is exponential</strong> — each bar's slope, volume and relATR is larger than the previous bar's. The <em>rate of change is the change of rate</em>. Grinds have straight-line slope; capitulations have hockey-stick slope.</p>
+
+    <p class="pullquote">Once no more market sellers exist below the shelf, price has to reverse simply because natural bid returns.</p>
+
+    <p>The macro lens confirms the story here. A controlled crypto grind-down on rising yields does not produce this shape. What produced this was a specific stop cascade: the $23.36 pivot acted as a magnet, algos hunted it, long-only holders got margin-called on the ETH breakdown, and the same volume that ripped through the pivot exhausted itself against the $22.99 shelf.</p>
+  </section>
+
+  <!-- Sources -->
+  <div class="sources">
+    <h4>Sources</h4>
+    <ul>
+      <li>Benzinga — <a href="https://www.benzinga.com/trading-ideas/movers/26/09/61786932/whats-going-on-with-bitmine-immersion-stock-tuesday">What's Going On With Bitmine Immersion Stock Tuesday</a></li>
+      <li>Econcurrents — <a href="https://econcurrents.substack.com/p/15-september-2026-market-close-and">15 September 2026 Market Close &amp; Major Financial Headlines</a></li>
+      <li>FX Leaders — <a href="https://www.fxleaders.com/news/2026/09/15/bmnr-and-mstr-stock-dive-as-ethereum-and-btc-fall-ahead-of-clarity-act-vote/">BMNR and MSTR Dive as ETH and BTC Fall Ahead of CLARITY Act Vote</a></li>
+    </ul>
+  </div>
+
+  <div class="colophon">
+    Trade #471 · Reversal-Long · A+ · Compiled from 2m / 30m / daily bars · Kiev time (UTC+3)
+  </div>
+
+</div>

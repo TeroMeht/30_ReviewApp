@@ -146,11 +146,27 @@ function TradeReviewPageInner() {
 
   return (
     <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
-      <ReviewHeader
-        trade={trade}
-        neighbors={neighbors}
-        onSelectTrade={handleSelectTrade}
-      />
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <ReviewHeader
+            trade={trade}
+            neighbors={neighbors}
+            onSelectTrade={handleSelectTrade}
+          />
+        </div>
+        {/* Full-dataset CSV download: all three timeframes' bars for this
+            trade, with every computed indicator merged onto each bar by
+            timestamp. Server sets Content-Disposition so the browser
+            picks up the filename automatically. */}
+        <a
+          href={`${API_PREFIX}/trades/${trade.tradeid}/dataset.csv`}
+          download
+          style={csvBtn}
+          title="Download all bars + indicators for this trade as CSV"
+        >
+          Download CSV
+        </a>
+      </div>
 
       <div
         style={{
@@ -215,4 +231,18 @@ const panelHdr: React.CSSProperties = {
   borderBottom: "1px solid #e2e8f0",
   paddingBottom: 6,
   marginBottom: 8,
+};
+
+const csvBtn: React.CSSProperties = {
+  display: "inline-block",
+  padding: "6px 12px",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#0f172a",
+  background: "#fff",
+  border: "1px solid #e2e8f0",
+  borderRadius: 6,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+  cursor: "pointer",
 };

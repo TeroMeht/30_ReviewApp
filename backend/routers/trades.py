@@ -1,11 +1,16 @@
 
+import csv
+import io
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends, Query
+from zoneinfo import ZoneInfo
+
+from fastapi import APIRouter, HTTPException, Depends, Query, Response
 import asyncpg
 
 from data_sources.ib._client import IBSource
 from core.config import settings
 from dependencies import get_db_conn, get_db_pool, get_ib_source
+from helpers.speed_metrics import compute_speed_series, DEFAULT_RELATR_THRESHOLD
 from schemas.api_schemas import (
     Trade,
     TradeCreate,
@@ -333,6 +338,161 @@ async def get_trade_bars(
         timeframe=tf.label,
         bars=bars,
         indicators=indicators,
+    )
+
+
+# ─── Full-dataset CSV export ──────────────────────────────────────────────────
+
+_CSV_FIELDS = [
+    "timeframe", "tradeid", "symbol",
+    "trade_date", "trade_setup", "trade_category",
+    "time", "open", "high", "low", "close", "volume",
+    "ema9", "vwap", "relatr", "rvol", "sma200",
+    # Speed of move (% per 2min bar) — anchored on the most recent EMA9
+    # cross-down (long setup). Populated only on 2min bars where
+    # |relatr| >= 0.45. See helpers/speed_metrics.py for the concept.
+    "speed_pct_per_bar",
+]
+
+
+def _fmt_indicator(v: Optional[float]) -> str:
+    """Indicator values: 6 decimals when present, empty when None."""
+    if v is None:
+        return ""
+    return f"{v:.6f}"
+
+
+@router.get("/{tradeid}/dataset.csv")
+async def download_trade_dataset_csv(
+    tradeid: int,
+    db_conn=Depends(get_db_conn),
+):
+    """
+    Full trade dataset as one CSV: every bar from every timeframe
+    (daily, 30min, 2min) linked to this trade, plus the computed
+    indicator values (EMA9 / VWAP / Relatr / Rvol on the 2min set,
+    SMA200 on the daily set) merged onto each bar by timestamp.
+    Blank cells where the indicator doesn't apply for that timeframe.
+    Suitable for offline analysis, model training, or spot-checking.
+
+    Filename is set via Content-Disposition so a browser
+    <a href download> gets a meaningful name automatically.
+    """
+    try:
+        trade = await fetch_trade_by_id(db_conn, tradeid)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    # Fetch every timeframe's bars in one loop -- same shape the
+    # /bars endpoint uses, minus its response_model wrapping.
+    per_tf: dict[str, list[BarRowSchema]] = {}
+    for tf in TIMEFRAMES:
+        rows = await db_conn.fetch(
+            f"""
+            SELECT time, open, high, low, close, volume
+            FROM   {tf.table}
+            WHERE  tradeid = $1
+            ORDER BY time ASC
+            """,
+            tradeid,
+        )
+        per_tf[tf.label] = [
+            BarRowSchema(
+                time=r["time"],
+                open=r["open"], high=r["high"], low=r["low"], close=r["close"],
+                volume=int(r["volume"]),
+            )
+            for r in rows
+        ]
+
+    # Build indicators per timeframe. 2min needs the daily bars as
+    # ATR input (same wiring as get_trade_bars above).
+    daily_bars = per_tf.get("daily") or None
+    indicators_by_tf = {
+        tf.label: build_indicators(
+            tf.label,
+            per_tf[tf.label],
+            daily_bars=daily_bars if tf.label == "2min" else None,
+            symbol=trade.symbol,
+        )
+        for tf in TIMEFRAMES
+    }
+
+    # Emit both `trade_date` and each bar's `time` in the app's
+    # configured wall-clock timezone (settings.TIMEZONE = Europe/Helsinki),
+    # matching what the chart's x-axis shows. Raw UTC readings out of
+    # asyncpg (offset +00) are confusing to eyeball against the chart --
+    # the DST-aware conversion below keeps them aligned.
+    tz = ZoneInfo(settings.TIMEZONE)
+    trade_date_local = trade.date.astimezone(tz).isoformat()
+    # For the filename we want the LOCAL calendar day of the trade,
+    # not the UTC calendar day (which for post-midnight-Helsinki trades
+    # rolls back one date).
+    trade_day = trade.date.astimezone(tz).date().isoformat()
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_CSV_FIELDS, lineterminator="\n")
+    writer.writeheader()
+
+    for tf in TIMEFRAMES:
+        bars = per_tf[tf.label]
+        # {indicator_name: {bar_ts: value}} lookup for O(1) merge by ts.
+        # IndicatorPoint.time is copied directly from BarRow.time inside
+        # build_indicators, so equality-by-datetime is safe here.
+        ind_lookups: dict[str, dict] = {
+            s.name: {p.time: p.value for p in s.points}
+            for s in indicators_by_tf[tf.label]
+        }
+        # Speed of move: running value at every 2min bar where an EMA9
+        # cross-down anchor is active. Filtered to bars where |relatr|
+        # >= 0.45 for the CSV — every other bar (and every daily / 30min
+        # row) leaves the column blank. Long-side anchor for now.
+        if tf.label == "2min":
+            relatr_lookup = ind_lookups.get("relatr", {})
+            speed_running = compute_speed_series(
+                bars,
+                ema9_by_time=ind_lookups.get("ema9", {}),
+                direction="long",
+            )
+            speed_by_time = {
+                t: v for t, v in speed_running.items()
+                if v is not None
+                and (r := relatr_lookup.get(t)) is not None
+                and abs(float(r)) >= DEFAULT_RELATR_THRESHOLD
+            }
+        else:
+            speed_by_time = {}
+
+        for b in bars:
+            sp = speed_by_time.get(b.time)
+            writer.writerow({
+                "timeframe":       tf.label,
+                "tradeid":         tradeid,
+                "symbol":          trade.symbol,
+                "trade_date":      trade_date_local,
+                "trade_setup":     trade.setup or "",
+                "trade_category":  trade.category or "",
+                "time":            b.time.astimezone(tz).isoformat(),
+                # Decimal -> plain string keeps the DB precision intact
+                # in a way Excel / pandas both read cleanly.
+                "open":            str(b.open),
+                "high":            str(b.high),
+                "low":             str(b.low),
+                "close":           str(b.close),
+                "volume":          b.volume,
+                "ema9":            _fmt_indicator(ind_lookups.get("ema9",   {}).get(b.time)),
+                "vwap":            _fmt_indicator(ind_lookups.get("vwap",   {}).get(b.time)),
+                "relatr":          _fmt_indicator(ind_lookups.get("relatr", {}).get(b.time)),
+                "rvol":            _fmt_indicator(ind_lookups.get("rvol",   {}).get(b.time)),
+                "sma200":          _fmt_indicator(ind_lookups.get("sma200", {}).get(b.time)),
+                "speed_pct_per_bar": _fmt_indicator(sp),
+            })
+
+    filename = f"trade_{tradeid}_{trade.symbol}_{trade_day}.csv"
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

@@ -14,10 +14,10 @@ import TradeChart from "./TradeChart";
 const TIMEFRAMES: { tf: Timeframe; label: string; height: number }[] = [
   { tf: "daily", label: "Daily · 1Y", height: 280 },
   { tf: "30min", label: "30 min · 30D", height: 320 },
-  // 2-min chart hosts three panes: price (~ 420px), Relatr (200px,
-  // expanded so the ±0.5 reference bands have room), Rvol (110px).
-  // Bump total height to keep the price pane usable.
-  { tf: "2min",  label: "2 min · 5D",  height: 730 },
+  // 2-min chart hosts four panes now: price (~ 400px), Relatr (200px),
+  // Rvol (100px), Speed (200px). Stretch factors 4:2:1:2 in TradeChart.
+  // Bump total height so the price pane still reads.
+  { tf: "2min",  label: "2 min · 5D",  height: 920 },
 ];
 
 interface Props {

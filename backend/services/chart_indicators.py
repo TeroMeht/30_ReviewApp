@@ -12,6 +12,8 @@ from indicators.rvol       import avg_volume_model, rvol_series
 from indicators.sma        import sma_series
 from indicators.vwap       import vwap_series
 
+from helpers.speed_metrics import compute_speed_series
+
 from schemas.api_schemas import (
     BarRow as BarRowSchema,
     IndicatorPoint,
@@ -35,6 +37,7 @@ VWAP_COLOR:   str = "#dc2626"   # red
 SMA200_COLOR: str = "#dc2626"   # red (daily chart)
 RELATR_COLOR: str = "#2563eb"   # blue (sub-pane 1)
 RVOL_COLOR:   str = "#a855f7"   # purple (sub-pane 2)
+SPEED_COLOR:  str = "#ea580c"   # orange (sub-pane 3)
 
 
 # ─── Adapters ────────────────────────────────────────────────────────────────
@@ -292,6 +295,28 @@ def build_indicators(
             points=[
                 IndicatorPoint(time=t, value=c.rvol)
                 for t, c in zip(times, candles)
+            ],
+        )
+    )
+
+    # ─── Pane 3: Speed of move -- %/bar since the last EMA9 cross-down.
+    # Runs continuously while an anchor is active (bars between a
+    # close-crosses-BELOW-EMA9 and the next close-crosses-ABOVE). Bars
+    # with no active anchor come back as None -> the chart draws a gap.
+    ema9_by_time = {c.ts: c.ema9 for c in candles}
+    speed_by_time = compute_speed_series(
+        bars, ema9_by_time=ema9_by_time, direction="long",
+    )
+    series.append(
+        IndicatorSeries(
+            name="speed",
+            label="Speed (%/bar from EMA9 cross-down)",
+            color=SPEED_COLOR,
+            pane=3,
+            series_type="line",
+            points=[
+                IndicatorPoint(time=t, value=speed_by_time.get(t))
+                for t in times
             ],
         )
     )
