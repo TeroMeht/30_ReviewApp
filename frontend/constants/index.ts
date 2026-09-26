@@ -146,3 +146,22 @@ export const transactionCategoryStyles = {
     chipBackgroundColor: "bg-inherit",
   },
 };
+
+// ─── Trade taxonomy (shared by Trade Review + Playbook) ─────────────────────
+
+/** Setup labels stored in trades.setup. */
+export const SETUP_OPTIONS = [
+  "No setup",
+  "VWAP continuation",
+  "VWAP continuation short",
+  "Reversal short",
+  "Reversal long",
+  "Parabolic short",
+  "Extreme reversal",
+  "Opening range breakout",
+  "Opening range breakdown",
+  "Swing exit",
+] as const;
+
+/** Quality ratings stored in trades.category — worst → best. */
+export const CATEGORY_OPTIONS = ["B-", "B", "A-", "A", "A+"] as const;

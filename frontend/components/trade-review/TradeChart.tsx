@@ -49,6 +49,17 @@ interface Props {
    *  where Relatr extended past ±0.45 in the last 5 bars (mean-reversion
    *  setup). No-op for non-2min timeframes. Default: true. */
   showCrossoverMarkers?: boolean;
+  /** Extra labelled markers drawn on the candles, e.g. the Playbook's
+   *  "% from previous close" at the relATR max bar. `time` must match a
+   *  bar's time (ISO); the marker sits at `price` with `text` beside it. */
+  annotations?: ChartAnnotation[];
+}
+
+export interface ChartAnnotation {
+  time: string;
+  price: number;
+  text: string;
+  color?: string;
 }
 
 const HELSINKI_FMT = new Intl.DateTimeFormat("en-GB", {
@@ -110,6 +121,7 @@ export default function TradeChart({
   indicators,
   hideLastValueLabels = false,
   showCrossoverMarkers = true,
+  annotations,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -380,14 +392,16 @@ export default function TradeChart({
         }
 
         // Rvol "above-average" threshold: 1× cumulative-vs-baseline.
+        // Label always shown (even in the Playbook's stripped-down view)
+        // so it's clear what the dashed line means.
         if (ind.name === "rvol") {
           series.createPriceLine({
             price: 1,
             color: "#000000",
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
-            axisLabelVisible: !hideLastValueLabels,
-            title: "1",
+            axisLabelVisible: true,
+            title: "",
           });
         }
 
@@ -443,40 +457,28 @@ export default function TradeChart({
 
     // Pane sizing in lightweight-charts v5 is driven by stretch factors,
     // not absolute pixels. Default stretch is auto-assigned and ends up
-    // heavily favouring the price pane, which leaves the Relatr pane
-    // barely visible. Force a proportional split:
+    // heavily favouring the price pane, which leaves the sub-panes
+    // barely visible. Force a proportional split by what each pane holds:
     //   price : relatr : rvol : speed  =  4 : 2 : 1 : 2
-    // (Relatr is half the price-pane height, Rvol is half of Relatr,
-    // Speed matches Relatr so the 0-0.2-0.4 bands stay readable.)
+    // Keyed by content (not index) so callers can drop panes — e.g. the
+    // Playbook shows only price + Rvol and the Rvol pane stays small.
+    const STRETCH: Record<string, number> = { relatr: 2, rvol: 1, speed: 2 };
     const panes = chart.panes();
-    if (panes.length >= 1) {
+    panes.forEach((pane, i) => {
+      let factor = i === 0 ? 4 : 2;
+      if (i > 0) {
+        for (const ind of desired) {
+          if ((ind.pane ?? 0) === i && STRETCH[ind.name] != null) {
+            factor = STRETCH[ind.name];
+          }
+        }
+      }
       try {
-        panes[0].setStretchFactor(4); // price
+        pane.setStretchFactor(factor);
       } catch {
         /* ignore */
       }
-    }
-    if (panes.length >= 2) {
-      try {
-        panes[1].setStretchFactor(2); // Relatr
-      } catch {
-        /* ignore */
-      }
-    }
-    if (panes.length >= 3) {
-      try {
-        panes[2].setStretchFactor(1); // Rvol
-      } catch {
-        /* ignore */
-      }
-    }
-    if (panes.length >= 4) {
-      try {
-        panes[3].setStretchFactor(2); // Speed
-      } catch {
-        /* ignore */
-      }
-    }
+    });
   }, [indicators]);
 
   // Group fills by ibOrderID — 1 IB order = 1 marker, mirroring the
@@ -624,7 +626,19 @@ export default function TradeChart({
       }
     }
 
-    const allMarkers = [...markers, ...crossoverMarkers];
+    const annotationMarkers: SeriesMarker<Time>[] = (annotations ?? []).map(
+      (a) => ({
+        time: helsinkiWallSeconds(a.time),
+        position: "atPriceMiddle",
+        price: a.price,
+        color: a.color ?? "#7c3aed",
+        shape: "circle",
+        size: 1,
+        text: a.text,
+      }),
+    );
+
+    const allMarkers = [...markers, ...crossoverMarkers, ...annotationMarkers];
     allMarkers.sort((a, b) => (a.time as number) - (b.time as number));
 
     // Reuse one markers plugin per chart lifetime. setMarkers([]) clears
@@ -636,7 +650,7 @@ export default function TradeChart({
     } else {
       markersPluginRef.current = createSeriesMarkers(candles, allMarkers);
     }
-  }, [executions, bars, timeframe, indicators, showCrossoverMarkers]);
+  }, [executions, bars, timeframe, indicators, showCrossoverMarkers, annotations]);
 
   return (
     <div

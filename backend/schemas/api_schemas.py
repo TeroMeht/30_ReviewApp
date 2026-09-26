@@ -324,69 +324,23 @@ class WeeklyOrderCategoriesResponse(BaseModel):
 
 # ─── Playbook ─────────────────────────────────────────────────────────────────
 
-class PlaybookSetupSummary(BaseModel):
-    """One row of GET /api/playbook/setups — a setup label with its
-    aggregate stats over the requested window. Powers the Playbook
-    page's section list.
+class PlaybookGalleryTrade(BaseModel):
+    """One trade card in the Playbook chart gallery.
 
-    ``total_pnl`` is the summed realised P/L over every trade whose
-    ``setup`` matches the label. Trades with no executions are excluded
-    (no P/L).
-    """
-    setup_label: str
-    trade_count: int
-    total_pnl: Decimal
-
-
-class PlaybookSetupsResponse(BaseModel):
-    """Response for GET /api/playbook/setups. Rows are sorted by
-    ``trade_count`` descending — most observed setups first."""
-    weeks: Optional[int] = None  # None when window=all
-    rows: list[PlaybookSetupSummary]
-
-
-class PlaybookTradeSummary(BaseModel):
-    """One trade as it appears in the Playbook chart grid for a given
-    setup. Slim subset of ``Trade`` plus the precomputed ``realized_pnl``.
+    ``rating`` is ``trades.category`` (B- .. A+), renamed here because
+    that is what it means on this page.
     """
     tradeid: int
     symbol: str
     date: datetime
     setup: Optional[str] = None
-    realized_pnl: Optional[Decimal] = None
+    rating: Optional[str] = None
 
 
-class PlaybookTradesResponse(BaseModel):
-    """Response for GET /api/playbook/setups/{label}/trades. Trades are
-    sorted by ``date`` descending — most recent first."""
-    setup_label: str
-    weeks: Optional[int] = None
-    trades: list[PlaybookTradeSummary]
-
-
-class PlaybookNotes(BaseModel):
-    """Structured strategy notes for one setup. All fields default to
-    empty string so a setup that's never been written about still
-    returns a well-formed object — keeps the frontend simple. Mirrored
-    by the columns in db/playbook.py."""
-    setup_label: str
-    description: str = ""
-    entry_rules: str = ""
-    exit_rules: str = ""
-    common_mistakes: str = ""
-    examples: str = ""
-    updated_at: Optional[datetime] = None
-
-
-class PlaybookNotesUpdate(BaseModel):
-    """Request body for PUT /api/playbook/setups/{label}/notes. All
-    fields optional — sent fields overwrite, omitted fields keep their
-    existing values."""
-    description: Optional[str] = None
-    entry_rules: Optional[str] = None
-    exit_rules: Optional[str] = None
-    common_mistakes: Optional[str] = None
-    examples: Optional[str] = None
+class PlaybookGalleryResponse(BaseModel):
+    """Response for GET /api/playbook/trades. Newest first."""
+    weeks: Optional[int] = None  # None when window=all
+    trades: list[PlaybookGalleryTrade]
 
 
 # ─── Weekly Review (Claude-generated) ─────────────────────────────────────────

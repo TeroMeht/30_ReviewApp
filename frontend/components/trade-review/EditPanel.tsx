@@ -13,23 +13,7 @@
 import { useEffect, useState } from "react";
 import { API_PREFIX } from "@/lib/api_prefix";
 import type { Trade, TradeUpdate } from "@/lib/types";
-
-const SETUP_OPTIONS = [
-  "No setup",
-  "VWAP continuation",
-  "VWAP continuation short",
-  "Reversal short",
-  "Reversal long",
-  "Parabolic short",
-  "Extreme reversal",
-  "Opening range breakout",
-  "Opening range breakdown",
-  "Swing exit",
-] as const;
-
-// Quality categories — worst → best so the dropdown reads in the same
-// order the user thinks about them.
-const CATEGORY_OPTIONS = ["B-", "B", "A-", "A", "A+"] as const;
+import { CATEGORY_OPTIONS, SETUP_OPTIONS } from "@/constants";
 
 interface Props {
   trade: Trade;

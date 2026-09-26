@@ -296,6 +296,25 @@ export interface WeeklyOrderCategoriesResponse {
 
 // ─── Playbook ────────────────────────────────────────────────────────────────
 
+/** One card in the Playbook chart gallery (GET /api/playbook/trades). */
+export interface PlaybookGalleryTrade {
+  tradeid: number;
+  symbol: string;
+  /** ISO datetime. */
+  date: string;
+  setup: string | null;
+  /** trades.category (B- .. A+). */
+  rating: string | null;
+}
+
+export interface PlaybookGalleryResponse {
+  weeks: number | null;
+  trades: PlaybookGalleryTrade[];
+}
+
+// Legacy per-setup + notes types. Only used by the old PlaybookSection /
+// PlaybookNotesEditor components, which the Playbook page no longer uses.
+
 export interface PlaybookSetupSummary {
   setup_label: string;
   trade_count: number;
